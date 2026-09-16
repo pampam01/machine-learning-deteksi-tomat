@@ -38,6 +38,11 @@ NAMA_FITUR = [f"fitur_{i}" for i in range(JUMLAH_FITUR)]
 # Resolusi standar 640x480 agar ringan di CPU/RAM dan berjalan halus di 30 FPS
 UKURAN_FRAME = (640, 480)
 
+# Konfigurasi Tampilan Kamera
+# False = Asli / Natural (TIDAK mirror, posisi kiri-kanan sesuai fisik objek nyata)
+# True = Mirror (Efek cermin / selfie kamera)
+MIRROR_KAMERA = False
+
 # ============================================================
 # KONFIGURASI WEB API / CPANEL & SENSOR IR
 # ============================================================
@@ -1080,7 +1085,10 @@ if __name__ == "__main__":
         print(" -", kelas)
 
     print()
-    print("Tekan Q untuk keluar.")
+    print("Petunjuk Kontrol:")
+    print(" - Tekan 'Q': Keluar dari program.")
+    print(" - Tekan 'M': Balik tampilan kamera (Toggle Mirror On / Off).")
+    print(" - Tekan 'R': Reset counter jumlah tomat di LCD ESP32.")
     print("=" * 60)
 
     # ========================================================
@@ -1195,8 +1203,10 @@ if __name__ == "__main__":
             time.sleep(0.005)
             continue
 
-        # Mirror kamera
-        frame = cv2.flip(frame, 1)
+        # Pembalikan horizontal (Mirroring):
+        # Default False = Arah fisik asli (tidak terbalik kiri-kanan)
+        if MIRROR_KAMERA:
+            frame = cv2.flip(frame, 1)
 
         # Resize jika ukuran frame berbeda dengan UKURAN_FRAME
         if frame.shape[1] != UKURAN_FRAME[0] or frame.shape[0] != UKURAN_FRAME[1]:
@@ -1315,6 +1325,10 @@ if __name__ == "__main__":
 
         if tombol == ord("q"):
             break
+        elif tombol == ord("m"):
+            MIRROR_KAMERA = not MIRROR_KAMERA
+            status_str = "AKTIF (Efek Cermin)" if MIRROR_KAMERA else "NONAKTIF (Arah Fisik Asli)"
+            print(f"[INFO] Tampilan Mirror: {status_str}")
         elif tombol == ord("r"):
             if serial_worker and serial_worker.is_connected():
                 serial_worker.send("reset_tomat")
