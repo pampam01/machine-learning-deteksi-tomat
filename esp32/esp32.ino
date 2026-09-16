@@ -317,8 +317,9 @@ void updateTampilanLcd() {
 // EKSEKUSI PERINTAH KLASIFIKASI DENGAN PROTEKSI ANTI-TABRAKAN
 // ============================================================
 void eksekusiAksi(String cmd) {
+  cmd.toLowerCase();
   // 1. MATANG (Kelas '0') -> Buka Servo 1 (Buang Kiri) dengan Profil S-Curve
-  if (cmd == "matang" || cmd == "0") {
+  if (cmd == "matang" || cmd == "0" || cmd == "merah") {
     totalTomat++;
     totalMatang++;
     pesanKhususLcd = "SORTIR: MATANG";
@@ -338,11 +339,11 @@ void eksekusiAksi(String cmd) {
       Serial.println("STATUS_BUSY");
     }
   }
-  // 2. SETENGAH MATANG (Kelas '2') -> Buka Servo 2 (Buang Kanan) dengan Profil S-Curve
-  else if (cmd == "setengah_matang" || cmd == "2") {
+  // 2. SETENGAH MATANG / KUNING (Kelas '2') -> Buka Servo 2 (Buang Kanan) dengan Profil S-Curve
+  else if (cmd == "kuning" || cmd == "setengah" || cmd == "setengah_matang" || cmd == "2") {
     totalTomat++;
     totalSetengah++;
-    pesanKhususLcd = "SORTIR: SETENGAH";
+    pesanKhususLcd = "SORTIR: KUNING";
     waktuPesanKhusus = millis();
     perluUpdateLcd = true;
 
@@ -354,13 +355,13 @@ void eksekusiAksi(String cmd) {
       startAngle1      = SERVO1_STANDBY;
       targetAngle1     = SERVO1_STANDBY;
       stateSorter      = STATE_SERVO2_OPENING;
-      Serial.println("ACK_SETENGAH_OPENING");
+      Serial.println("ACK_KUNING_OPENING");
     } else {
       Serial.println("STATUS_BUSY");
     }
   }
   // 3. MENTAH (Kelas '1') -> Kedua Servo Tetap Standby (Lolos Lurus)
-  else if (cmd == "mentah" || cmd == "1") {
+  else if (cmd == "mentah" || cmd == "1" || cmd == "hijau") {
     totalTomat++;
     totalMentah++;
     pesanKhususLcd = "SORTIR: MENTAH";
@@ -445,9 +446,9 @@ void prosesSerial() {
           Serial.println(statusProximity);
         }
         // 3. Perintah pemilah tomat & kontrol status
-        else if (data == "matang" || data == "0" ||
-                 data == "setengah_matang" || data == "2" ||
-                 data == "mentah" || data == "1" ||
+        else if (data == "matang" || data == "0" || data == "merah" ||
+                 data == "kuning" || data == "setengah" || data == "setengah_matang" || data == "2" ||
+                 data == "mentah" || data == "1" || data == "hijau" ||
                  data == "standby" || data == "reset" || data == "3" ||
                  data == "hidup" || data == "mati" ||
                  data == "on" || data == "off" ||

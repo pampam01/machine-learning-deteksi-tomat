@@ -55,7 +55,9 @@ WEB_API_THROTTLE_DETIK = 2.0
 # Sesuai data.yaml dan dataset training YOLO / C4.5:
 # - Kelas '0' = matang (Merah) -> kirim perintah 'matang'
 # - Kelas '1' = mentah (Hijau) -> kirim perintah 'mentah'
-# - Kelas '2' = setengah_matang (Kuning) -> kirim perintah 'setengah_matang'
+# - Kelas '0' = matang (Merah) -> kirim perintah 'matang'
+# - Kelas '1' = mentah (Hijau) -> kirim perintah 'mentah'
+# - Kelas '2' = setengah_matang (Kuning) -> kirim perintah pendek 'kuning'
 KELAS_MAP = {
     "0": {
         "command": "matang",
@@ -68,7 +70,7 @@ KELAS_MAP = {
         "warna_bgr": (0, 255, 0),       # Hijau (BGR)
     },
     "2": {
-        "command": "setengah_matang",
+        "command": "kuning",
         "label_ui": "SETENGAH MATANG (KUNING)",
         "warna_bgr": (0, 255, 255),     # Kuning (BGR)
     },
@@ -84,7 +86,12 @@ KELAS_MAP = {
         "warna_bgr": (0, 255, 0),
     },
     "setengah_matang": {
-        "command": "setengah_matang",
+        "command": "kuning",
+        "label_ui": "SETENGAH MATANG (KUNING)",
+        "warna_bgr": (0, 255, 255),
+    },
+    "kuning": {
+        "command": "kuning",
         "label_ui": "SETENGAH MATANG (KUNING)",
         "warna_bgr": (0, 255, 255),
     },
@@ -880,12 +887,18 @@ def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor=
 # ============================================================
 def dapatkan_kandidat_kamera_linux():
     """
-    Mendeteksi semua perangkat video di /sys/class/video4linux/
-    Memfilter node codec/isp Raspberry Pi agar webcam USB nyata diprioritaskan.
+    Mendeteksi perangkat video kamera fisik di /sys/class/video4linux/
+    Memfilter dan mengabaikan semua node codec/ISP internal Raspberry Pi
+    agar OpenCV tidak mengalami select() timeout atau macet.
     """
     import glob
-    kandidat = []
+    kandidat_kamera = []
     video_dirs = sorted(glob.glob("/sys/class/video4linux/video*"))
+
+    kata_kunci_internal = [
+        "codec", "isp", "m2m", "meta", "dummy", "dec", "enc",
+        "hevc", "h264", "bcm2835", "rpi-", "stats", "output", "image_fx"
+    ]
 
     for vdir in video_dirs:
         vname = os.path.basename(vdir)
@@ -904,21 +917,32 @@ def dapatkan_kandidat_kamera_linux():
             except Exception:
                 pass
 
-        # Identifikasi apakah node ini adalah codec/isp Raspberry Pi
         nama_lower = nama_perangkat.lower()
-        is_codec = any(x in nama_lower for x in ["codec", "isp", "m2m", "meta", "dummy", "decod", "encod"])
 
-        kandidat.append({
-            "index": idx,
-            "node": dev_node,
-            "nama": nama_perangkat or vname,
-            "is_codec": is_codec,
-        })
+        # Cek apakah perangkat terhubung via USB
+        device_link = os.path.join(vdir, "device")
+        is_usb = False
+        if os.path.islink(device_link):
+            try:
+                is_usb = "usb" in os.path.realpath(device_link).lower()
+            except Exception:
+                pass
 
-    # Prioritaskan kamera nyata (non-codec) di depan
-    utama = [k for k in kandidat if not k["is_codec"]]
-    cadangan = [k for k in kandidat if k["is_codec"]]
-    return utama + cadangan
+        # Filter: abaikan codec/ISP internal Raspberry Pi
+        is_internal_codec = any(x in nama_lower for x in kata_kunci_internal)
+        if idx >= 10 and not is_usb and ("camera" not in nama_lower and "webcam" not in nama_lower):
+            is_internal_codec = True
+
+        # Hanya ambil perangkat jika BUKAN codec internal, atau memang terhubung via USB
+        if not is_internal_codec or is_usb:
+            kandidat_kamera.append({
+                "index": idx,
+                "node": dev_node,
+                "nama": nama_perangkat or vname,
+                "is_usb": is_usb,
+            })
+
+    return kandidat_kamera
 
 
 def buka_kamera_otomatis():
@@ -932,52 +956,54 @@ def buka_kamera_otomatis():
     print("=" * 60)
 
     if IS_LINUX:
-        kandidat_linux = dapatkan_kandidat_kamera_linux()
-        if kandidat_linux:
-            print(f"[KAMERA] Node video terdeteksi di Linux ({len(kandidat_linux)} node):")
-            for k in kandidat_linux:
-                tag = "(Codec/ISP)" if k["is_codec"] else "(Kamera Nyata)"
-                print(f"  - {k['node']} (Index {k['index']}): '{k['nama']}' {tag}")
+        kandidat_kamera = dapatkan_kandidat_kamera_linux()
+        if kandidat_kamera:
+            print(f"[KAMERA] Kamera fisik terdeteksi di Linux ({len(kandidat_kamera)} perangkat):")
+            for k in kandidat_kamera:
+                tipe = "USB Webcam" if k["is_usb"] else "Kamera"
+                print(f"  - {k['node']} (Index {k['index']}): '{k['nama']}' [{tipe}]")
+
+            # Coba buka dari daftar kamera yang terdeteksi
+            for item in kandidat_kamera:
+                idx = item["index"]
+                node = item["node"]
+                nama = item["nama"]
+
+                metode_uji = [
+                    (node, cv2.CAP_V4L2, f"V4L2 via Path '{node}'"),
+                    (idx, cv2.CAP_V4L2, f"V4L2 via Index {idx}"),
+                    (node, None, f"Default via Path '{node}'"),
+                ]
+
+                for target, backend, label in metode_uji:
+                    try:
+                        cap = cv2.VideoCapture(target, backend) if backend is not None else cv2.VideoCapture(target)
+                        if cap.isOpened():
+                            ret, test_frame = cap.read()
+                            if ret and test_frame is not None and test_frame.size > 0:
+                                print(f"[KAMERA] BERHASIL membuka kamera: '{nama}' ({label})")
+                                return cap, f"{node} ('{nama}')"
+                            cap.release()
+                    except Exception:
+                        pass
         else:
-            print("[KAMERA] PERINGATAN: Tidak ada node /sys/class/video4linux terdeteksi.")
+            print("[KAMERA] PERINGATAN: Tidak ada webcam USB yang terdeteksi di /dev/video*.")
+            print("         (Semua node yang ada adalah decoder/ISP internal Raspberry Pi)")
 
-        # Coba buka dari daftar kandidat kamera nyata terlebih dahulu
-        for item in kandidat_linux:
-            idx = item["index"]
-            node = item["node"]
-            nama = item["nama"]
-
-            # Uji pembukaan dengan backend V4L2 eksplisit agar OpenCV tidak fallback ke FFMPEG
-            metode_uji = [
-                (node, cv2.CAP_V4L2, f"V4L2 via Path '{node}'"),
-                (idx, cv2.CAP_V4L2, f"V4L2 via Index {idx}"),
-                (node, None, f"Default via Path '{node}'"),
-            ]
-
-            for target, backend, label in metode_uji:
+        # Fallback index standar Linux HANYA jika file /dev/videoX benar-benar ada di filesystem
+        for fallback_idx in [0, 1, 2]:
+            dev_path = f"/dev/video{fallback_idx}"
+            if os.path.exists(dev_path):
                 try:
-                    cap = cv2.VideoCapture(target, backend) if backend is not None else cv2.VideoCapture(target)
+                    cap = cv2.VideoCapture(fallback_idx, cv2.CAP_V4L2)
                     if cap.isOpened():
                         ret, test_frame = cap.read()
                         if ret and test_frame is not None and test_frame.size > 0:
-                            print(f"[KAMERA] BERHASIL membuka kamera: '{nama}' ({label})")
-                            return cap, f"{node} ('{nama}')"
+                            print(f"[KAMERA] Berhasil membuka kamera di fallback index {fallback_idx}")
+                            return cap, fallback_idx
                         cap.release()
                 except Exception:
                     pass
-
-        # Fallback index standar Linux jika sysfs tidak menyediakan nama
-        for fallback_idx in [0, 1, 2, 4]:
-            try:
-                cap = cv2.VideoCapture(fallback_idx, cv2.CAP_V4L2)
-                if cap.isOpened():
-                    ret, test_frame = cap.read()
-                    if ret and test_frame is not None and test_frame.size > 0:
-                        print(f"[KAMERA] Berhasil membuka kamera di fallback index {fallback_idx}")
-                        return cap, fallback_idx
-                    cap.release()
-            except Exception:
-                pass
 
         # Fallback CSI Camera: GStreamer libcamerasrc (untuk Raspberry Pi Camera Module)
         try:
@@ -1065,26 +1091,28 @@ if __name__ == "__main__":
 
     if kamera is None or not kamera.isOpened():
         print("=" * 60)
-        print("[ERROR] Kamera tidak dapat dibuka pada semua metode dan index yang dicoba.")
+        print("[ERROR] KAMERA TIDAK DAPAT DITEMUKAN ATAU DIBUKA!")
         if IS_LINUX:
             print("-" * 60)
-            print("PANDUAN PENYELESAIAN MASALAH KAMERA DI RASPBERRY PI:")
+            print("PANDUAN PEMERIKSAAN HARDWARE KAMERA DI RASPBERRY PI:")
             print("-" * 60)
-            print("1. PERIKSA KONEKSI FISIK WEBCAM USB:")
-            print("   - Cabut dan colokkan kembali webcam ke port USB Raspberry Pi.")
-            print("   - Cek apakah terdeteksi di USB dengan perintah terminal: lsusb")
-            print("2. PERIKSA IZIN AKSES PERANGKAT VIDEO (PERMISSION):")
-            print("   - Berikan user izin akses group video:")
-            print("     sudo usermod -a -G video $USER")
-            print("   - Dan buka izin baca/tulis sementara:")
-            print("     sudo chmod 666 /dev/video*")
-            print("   - Kemudian reboot jika baru menambahkan group: sudo reboot")
-            print("3. PERIKSA DAFTAR PERANGKAT VIDEO:")
-            print("   - Jalankan: v4l2-ctl --list-devices")
-            print("     (Jika belum terpasang: sudo apt install -y v4l-utils)")
-            print("4. JIKA MENGGUNAKAN RASPBERRY PI CAMERA MODULE (KABEL FLEKSIBEL / CSI):")
-            print("   - Jalankan program dengan wrapper libcamerify:")
-            print("     libcamerify ./jalankan.sh   atau   libcamerify python3 utama_hsv.py")
+            print("A. JIKA ANDA MENGGUNAKAN WEBCAM USB:")
+            print("   1. Cek apakah webcam USB terdeteksi oleh sistem dengan perintah:")
+            print("      lsusb")
+            print("      (Pastikan nama webcam muncul di daftar perangkat USB)")
+            print("   2. Coba cabut dan colokkan ke port USB Raspberry Pi yang lain (disarankan port USB 3.0 warna biru).")
+            print("   3. Berikan izin akses group video:")
+            print("      sudo usermod -a -G video $USER")
+            print("      sudo chmod 666 /dev/video* 2>/dev/null || true")
+            print()
+            print("B. JIKA ANDA MENGGUNAKAN MODUL KAMERA RASPBERRY PI (KABEL PITA CSI):")
+            print("   1. Raspberry Pi OS Bookworm/Bullseye menggunakan driver 'libcamera'.")
+            print("   2. Cek apakah modul pita kamera terdeteksi oleh sistem:")
+            print("      rpicam-hello --list-cameras   atau   libcamera-hello --list-cameras")
+            print("   3. Jika modul terdeteksi, jalankan sistem menggunakan wrapper libcamerify:")
+            print("      libcamerify ./jalankan.sh")
+            print("      atau:")
+            print("      libcamerify python3 utama_hsv.py")
             print("-" * 60)
         else:
             print("Pastikan webcam USB terhubung dan tidak sedang digunakan aplikasi lain.")

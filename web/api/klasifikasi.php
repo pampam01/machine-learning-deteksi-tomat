@@ -68,7 +68,7 @@ function normalizeJenis($val) {
         return 'Matang';
     }
     // Kelas 2 C4.5 / YOLO: Setengah Matang (Kuning)
-    if (in_array($clean, ['setengah matang', 'setengah', 'half ripe', 'half', 'orange', 'yellow', '2'])) {
+    if (in_array($clean, ['setengah matang', 'setengah', 'kuning', 'half ripe', 'half', 'orange', 'yellow', '2'])) {
         return 'Setengah Matang';
     }
     // Kelas 1 C4.5 / YOLO: Mentah / Belum Matang (Hijau)
