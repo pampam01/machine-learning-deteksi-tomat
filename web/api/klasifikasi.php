@@ -59,25 +59,20 @@ $jumlah    = intval($input['jumlah'] ?? $_GET['jumlah'] ?? 1);
  */
 function normalizeJenis($val) {
     if ($val === null || $val === '') return null;
-    
-    // Support jika dikirim angka (0 = Belum Matang, 1 = Setengah Matang, 2 = Matang)
-    if (is_numeric($val)) {
-        $num = intval($val);
-        if ($num === 0) return 'Belum Matang';
-        if ($num === 1) return 'Setengah Matang';
-        if ($num === 2) return 'Matang';
-    }
 
     $clean = strtolower(trim((string)$val));
     $clean = str_replace(['_', '-'], ' ', $clean);
 
-    if (in_array($clean, ['matang', 'ripe', 'red'])) {
+    // Kelas 0 C4.5 / YOLO: Matang (Merah)
+    if (in_array($clean, ['matang', 'ripe', 'red', '0'])) {
         return 'Matang';
     }
-    if (in_array($clean, ['setengah matang', 'setengah', 'half ripe', 'half', 'orange', 'yellow'])) {
+    // Kelas 2 C4.5 / YOLO: Setengah Matang (Kuning)
+    if (in_array($clean, ['setengah matang', 'setengah', 'half ripe', 'half', 'orange', 'yellow', '2'])) {
         return 'Setengah Matang';
     }
-    if (in_array($clean, ['belum matang', 'belum', 'mentah', 'unripe', 'raw', 'green'])) {
+    // Kelas 1 C4.5 / YOLO: Mentah / Belum Matang (Hijau)
+    if (in_array($clean, ['belum matang', 'belum', 'mentah', 'unripe', 'raw', 'green', '1'])) {
         return 'Belum Matang';
     }
 

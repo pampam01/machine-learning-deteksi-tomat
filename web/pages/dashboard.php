@@ -62,8 +62,8 @@ include __DIR__ . '/../includes/header.php';
 <div id="toastNotification" class="toast-notification"></div>
 
 <div class="dashboard-date">
-    <div class="table-header" style="margin-bottom: 0; padding: 0;">
-        <div style="display: flex; align-items: center; gap: 10px;">
+    <div class="dashboard-date-wrapper">
+        <div class="dashboard-date-left">
             <h3 style="margin: 0; color: #fff;">📅 <?= $tanggal_indo ?></h3>
             <span class="counter-badge" id="sessionBadge">Sesi Hitungan: #<?= $current_session_id ?></span>
         </div>
@@ -107,16 +107,15 @@ include __DIR__ . '/../includes/header.php';
 <!-- Data Masuk Realtime -->
 <div class="table-container">
     <div class="table-header">
-        <div style="display: flex; align-items: center; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
             <h3>📥 Data Masuk Realtime</h3>
             <span class="status-time" id="lastUpdateTime">Memuat data...</span>
         </div>
-    
 
-        <div class="actions">
-              <button type="button" class="btn btn-warning" id="btnResetCounter" onclick="handleResetCounter()">
-            🔄 Reset Counter
-        </button>
+        <div class="actions" style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <button type="button" class="btn btn-warning" id="btnResetCounter" onclick="handleResetCounter()">
+                🔄 Reset Counter
+            </button>
             <button type="button" class="btn btn-outline btn-sm" id="btnClearData" onclick="clearIncomingData()">
                 🧹 Bersihkan Data Masuk
             </button>

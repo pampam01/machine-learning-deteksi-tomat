@@ -1,0 +1,55 @@
+# ============================================================
+# KONFIGURASI WEB & CPANEL HOSTING (APACHE / LITESPEED)
+# ============================================================
+
+# 1. Matikan Directory Indexing (Mencegah publik melihat isi struktur folder web)
+Options -Indexes
+
+# 2. Pengaturan Limit Upload & Memory PHP (cPanel)
+<IfModule mod_php.c>
+    php_value upload_max_filesize 20M
+    php_value post_max_size 25M
+    php_value max_execution_time 120
+    php_value max_input_time 120
+    php_value memory_limit 128M
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 20M
+    php_value post_max_size 25M
+    php_value max_execution_time 120
+    php_value max_input_time 120
+    php_value memory_limit 128M
+</IfModule>
+<IfModule mod_php8.c>
+    php_value upload_max_filesize 20M
+    php_value post_max_size 25M
+    php_value max_execution_time 120
+    php_value max_input_time 120
+    php_value memory_limit 128M
+</IfModule>
+
+# 3. Lindungi file sensitif agar tidak bisa diunduh langsung lewat browser
+<FilesMatch "\.(sql|log|md|ini|env|git|sh|bat)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Lindungi folder sql dan config dari akses publik langsung
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^sql/ - [F,L]
+</IfModule>
+
+# 4. Header Keamanan & Karakter Standar
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+AddDefaultCharset UTF-8

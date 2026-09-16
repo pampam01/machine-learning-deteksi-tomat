@@ -8,7 +8,7 @@ Servo servo2;
 // ============================================================
 const int pinServo1    = 18;  // GPIO Servo 1 (Pemilah Matang - Buang Kiri)
 const int pinServo2    = 19;  // GPIO Servo 2 (Pemilah Setengah Matang - Buang Kanan)
-const int pinProximity = 4;   // GPIO Sensor Proximity Konveyor
+const int pinProximity = 32;  // GPIO Sensor Proximity Konveyor (Pin 32)
 const int pinRelay     = 14;  // GPIO Relay (opsional: kontrol motor konveyor)
 
 // Baud rate komunikasi serial (disamakan dengan Python: 115200)
@@ -74,7 +74,27 @@ int currentAngle2 = SERVO2_STANDBY;
 int targetAngle1  = SERVO1_STANDBY;
 int targetAngle2  = SERVO2_STANDBY;
 
-int statusProximity = 0;
+// Status & Debounce Sensor Proximity IR (Pin 32)
+int statusProximity     = 1;
+int lastStatusProximity = 1;
+unsigned long lastProxDebounce = 0;
+
+void updateProximitySensor() {
+  int reading = digitalRead(pinProximity);
+  if (reading != lastStatusProximity) {
+    lastProxDebounce = millis();
+  }
+  if ((millis() - lastProxDebounce) > 25) {
+    if (reading != statusProximity) {
+      statusProximity = reading;
+      // Sensor IR: Transisi ke LOW saat buah tomat memotong sinar IR
+      if (statusProximity == LOW) {
+        Serial.println("EVENT_IR_TRIGGER");
+      }
+    }
+  }
+  lastStatusProximity = reading;
+}
 
 // ============================================================
 // FUNGSI GERAK S-CURVE MANUAL / TEST (BLOCKING AMAN UNTUK TEST)
@@ -363,7 +383,7 @@ void prosesSerial() {
 void setup() {
   Serial.begin(BAUD_RATE);
 
-  pinMode(pinProximity, INPUT);
+  pinMode(pinProximity, INPUT_PULLUP);
   pinMode(pinRelay, OUTPUT);
   digitalWrite(pinRelay, LOW);
 
@@ -402,6 +422,9 @@ void loop() {
   // 1. Perbarui gerakan servo & timer auto-close
   updateSmoothServo();
 
-  // 2. Baca perintah serial secara non-blocking
+  // 2. Pantau transisi sensor infrared proximity (Pin 32)
+  updateProximitySensor();
+
+  // 3. Baca perintah serial secara non-blocking
   prosesSerial();
 }

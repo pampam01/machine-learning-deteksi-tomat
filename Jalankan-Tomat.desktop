@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Pemilah Tomat C4.5
+Comment=Jalankan Sistem Deteksi dan Pemilah Tomat C4.5
+Exec=bash -c "cd $(dirname %k) && bash jalankan.sh; exec bash"
+Icon=camera-web
+Terminal=true
+Categories=Utility;Application;Development;
+StartupNotify=true

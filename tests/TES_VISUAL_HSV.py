@@ -6,7 +6,8 @@ import os
 # ============================================================
 # KONFIGURASI
 # ============================================================
-MODEL_PATH = "model_c45_hist.pkl"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "model_c45_hist.pkl") if os.path.exists(os.path.join(BASE_DIR, "model_c45_hist.pkl")) else "model_c45_hist.pkl"
 BINS_HSV = (8, 8, 4)
 
 JUMLAH_FITUR = BINS_HSV[0] * BINS_HSV[1] * BINS_HSV[2]

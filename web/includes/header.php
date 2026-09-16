@@ -48,7 +48,7 @@ $css_ver = file_exists($css_path) ? filemtime($css_path) : time();
                 <span class="logo-icon">🍅</span>
                 <h1>Tomata IoT</h1>
             </div>
-            <button class="sidebar-toggle" id="sidebarToggle" aria-label="Toggle Sidebar">
+            <button class="sidebar-toggle" id="sidebarToggle" title="Ciutkan / Lebarkan Menu" aria-label="Toggle Sidebar">
                 <span></span>
                 <span></span>
                 <span></span>
@@ -80,6 +80,12 @@ $css_ver = file_exists($css_path) ? filemtime($css_path) : time();
                     <span class="menu-text">Data Admin</span>
                 </a>
             </li>
+            <li class="<?= $current_page === 'simulator' ? 'active' : '' ?>">
+                <a href="<?= BASE_URL ?>/pages/simulator.php">
+                    <span class="menu-icon">🧪</span>
+                    <span class="menu-text">Tes Input / Simulator</span>
+                </a>
+            </li>
         </ul>
 
         <div class="sidebar-footer">
@@ -99,4 +105,20 @@ $css_ver = file_exists($css_path) ? filemtime($css_path) : time();
 
     <!-- Konten Utama -->
     <main class="main-content" id="mainContent">
+        <!-- Topbar khusus Mobile & Layar Tablet / Laptop Kecil -->
+        <div class="topbar-header" id="topbarHeader">
+            <button class="topbar-toggle" id="mobileToggle" aria-label="Buka Menu" title="Menu">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            <div class="topbar-logo">
+                <span class="logo-icon">🍅</span>
+                <span>Tomata IoT</span>
+            </div>
+            <div class="topbar-user">
+                <span class="badge badge-matang">👤 <?= htmlspecialchars($_SESSION['admin_nama'] ?? 'Admin') ?></span>
+            </div>
+        </div>
+
         <div class="content-wrapper">

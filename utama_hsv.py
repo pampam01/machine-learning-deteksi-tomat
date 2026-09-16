@@ -6,6 +6,8 @@ import os
 import sys
 import threading
 import queue
+import urllib.request
+import uuid
 from collections import deque, Counter
 
 python = sys.executable
@@ -17,9 +19,10 @@ print("path PYTHON === >", python)  # ini venv yang aktif di VSCode)
 
 
 # ============================================================
-# KONFIGURASI
+# KONFIGURASI PATH & SISTEM
 # ============================================================
-MODEL_PATH = "model_c45_hist.pkl"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "model_c45_hist.pkl")
 
 # Deteksi sistem operasi (Windows vs Linux / Raspberry Pi)
 IS_LINUX = sys.platform.startswith("linux")
@@ -34,6 +37,17 @@ NAMA_FITUR = [f"fitur_{i}" for i in range(JUMLAH_FITUR)]
 
 # Resolusi standar 640x480 agar ringan di CPU/RAM dan berjalan halus di 30 FPS
 UKURAN_FRAME = (640, 480)
+
+# ============================================================
+# KONFIGURASI WEB API / CPANEL & SENSOR IR
+# ============================================================
+# Ganti URL ini saat web sudah dihosting ke cPanel (contoh: "https://domainkamu.com/api/klasifikasi.php")
+WEB_API_URL = "http://127.0.0.1:8000/api/klasifikasi.php"
+WEB_API_ENABLED = True
+KIRIM_FOTO_TOMAT = True
+# Throttle jeda antar pengiriman ke web agar aman dari rate limiting / ModSecurity cPanel (10s window)
+WEB_API_THROTTLE_DETIK = 2.0
+
 
 # ============================================================
 # PEMETAAN KELAS HASIL MODEL C4.5
@@ -92,18 +106,44 @@ class ESP32Worker(threading.Thread):
         self.queue_cmd = queue.Queue()
         self.sensor_value = "-"
         self.last_ack = "-"
+        self.ir_triggered = False
+        self.ir_count = 0
         self.running = True
         self.lock = threading.Lock()
+
+    def _drain_incoming_lines(self):
+        """Membaca dan memproses semua baris serial yang ada di buffer tanpa membuang event IR."""
+        while self.ser and self.ser.is_open and self.ser.in_waiting > 0:
+            try:
+                line = self.ser.readline().decode(errors="ignore").strip()
+                if not line:
+                    continue
+                if "event_ir_trigger" in line.lower():
+                    with self.lock:
+                        self.ir_triggered = True
+                        self.ir_count += 1
+                    print(f"[SENSOR IR] Tomat terdeteksi melewati sensor IR (GPIO 32)! Total hitung: {self.ir_count}")
+                elif "ack" in line.lower() or "ok" in line.lower():
+                    with self.lock:
+                        self.last_ack = line
+                elif line in ("0", "1"):
+                    with self.lock:
+                        self.sensor_value = line
+            except Exception:
+                break
 
     def run(self):
         last_poll = 0.0
         while self.running and self.ser and self.ser.is_open:
             now = time.time()
 
+            # 0. Dapatkan semua pesan tak terjadwal dari ESP32 (misal EVENT_IR_TRIGGER)
+            self._drain_incoming_lines()
+
             # 1. Kirim command jika ada di antrean
             try:
                 cmd = self.queue_cmd.get_nowait()
-                self.ser.reset_input_buffer()
+                self._drain_incoming_lines()  # Jangan buang data serial sebelum kirim!
                 self.ser.write((cmd.strip() + "\n").encode())
                 time.sleep(0.005)
                 # Tunggu respon ACK singkat tanpa blocking lama
@@ -112,10 +152,16 @@ class ESP32Worker(threading.Thread):
                     if self.ser.in_waiting:
                         ack = self.ser.readline().decode(errors="ignore").strip()
                         if ack:
-                            with self.lock:
-                                self.last_ack = ack
-                            print(f"[SERIAL] Respon ESP32: {ack}")
-                            break
+                            if "event_ir_trigger" in ack.lower():
+                                with self.lock:
+                                    self.ir_triggered = True
+                                    self.ir_count += 1
+                                print(f"[SENSOR IR] Tomat terdeteksi (GPIO 32)! Total hitung: {self.ir_count}")
+                            else:
+                                with self.lock:
+                                    self.last_ack = ack
+                                print(f"[SERIAL] Respon ESP32: {ack}")
+                                break
                     time.sleep(0.003)
             except queue.Empty:
                 pass
@@ -125,7 +171,7 @@ class ESP32Worker(threading.Thread):
             # 2. Polling sensor proximity konveyor setiap 300 ms jika antrean kosong
             if now - last_poll >= 0.3 and self.queue_cmd.empty():
                 try:
-                    self.ser.reset_input_buffer()
+                    self._drain_incoming_lines()
                     self.ser.write(b"se\n")
                     time.sleep(0.005)
                     t_wait = time.time()
@@ -133,9 +179,14 @@ class ESP32Worker(threading.Thread):
                         if self.ser.in_waiting:
                             val = self.ser.readline().decode(errors="ignore").strip()
                             if val:
-                                with self.lock:
-                                    self.sensor_value = val
-                                break
+                                if "event_ir_trigger" in val.lower():
+                                    with self.lock:
+                                        self.ir_triggered = True
+                                        self.ir_count += 1
+                                else:
+                                    with self.lock:
+                                        self.sensor_value = val
+                                    break
                         time.sleep(0.003)
                     last_poll = now
                 except Exception:
@@ -149,6 +200,16 @@ class ESP32Worker(threading.Thread):
     def get_sensor(self):
         with self.lock:
             return self.sensor_value
+
+    def pop_ir_trigger(self):
+        with self.lock:
+            val = self.ir_triggered
+            self.ir_triggered = False
+            return val
+
+    def get_ir_count(self):
+        with self.lock:
+            return self.ir_count
 
     def is_connected(self):
         return self.ser and self.ser.is_open
@@ -194,6 +255,172 @@ def init_serial():
 
 
 serial_worker = init_serial()
+
+
+# ============================================================
+# WORKER PENGIRIMAN WEB API / CPANEL (NON-BLOCKING & ANTI-RATE LIMIT)
+# ============================================================
+class WebAPIWorker(threading.Thread):
+    """
+    Background worker mandiri untuk mengirim data hasil pemilahan dan foto tomat
+    ke API web (cPanel / Apache / PHP) secara non-blocking (kamera tetap 30 FPS halus).
+    Memiliki fitur perlindungan:
+    - Rate-limiting throttle (jeda aman >= 2 detik antar request agar tidak diblokir ModSecurity cPanel)
+    - Browser standard User-Agent header (mencegah WAF blocking)
+    - Connection: close header (mencegah deadlock socket keep-alive)
+    - Kompresi JPEG otomatis sebelum upload
+    - Auto-retry hingga 3 kali jika ada gangguan koneksi sementara
+    - Offline fallback journal (riwayat_offline.jsonl) agar tidak ada data yang hilang
+    """
+    def __init__(self, url, enabled=True, throttle_detik=2.0):
+        super().__init__(daemon=True)
+        self.url = url
+        self.enabled = enabled
+        self.throttle_detik = throttle_detik
+        self.queue = queue.Queue(maxsize=100)
+        self.running = True
+        self.total_terkirim = 0
+        self.total_gagal = 0
+        self.status_terakhir = "STANDBY"
+        self.waktu_kirim_terakhir = 0.0
+        self.lock = threading.Lock()
+        self.offline_file = os.path.join(BASE_DIR, "riwayat_offline.jsonl")
+
+    def send(self, label, confidence=0.96, metode="realtime_hsv", fitur="", crop_bgr=None):
+        if not self.enabled:
+            return
+        payload = {
+            "label": label,
+            "confidence": float(confidence),
+            "metode": metode,
+            "fitur": fitur,
+            "crop_bgr": crop_bgr.copy() if crop_bgr is not None else None,
+        }
+        try:
+            self.queue.put_nowait(payload)
+        except queue.Full:
+            print("[WEB API WARN] Antrean upload penuh, membuang data lama.")
+
+    def run(self):
+        while self.running:
+            try:
+                item = self.queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            # Jaga jeda antar request agar aman dari WAF / ModSecurity 10 detik cPanel
+            selisih = time.time() - self.waktu_kirim_terakhir
+            if selisih < self.throttle_detik:
+                time.sleep(self.throttle_detik - selisih)
+
+            sukses = self._post_data_with_retry(item)
+            self.waktu_kirim_terakhir = time.time()
+            with self.lock:
+                if sukses:
+                    self.total_terkirim += 1
+                    self.status_terakhir = f"SUKSES ({self.total_terkirim})"
+                else:
+                    self.total_gagal += 1
+                    self.status_terakhir = f"OFFLINE ({self.total_gagal})"
+
+    def _post_data_with_retry(self, item):
+        boundary = "----WebKitFormBoundary" + uuid.uuid4().hex
+        body_parts = []
+
+        fields = {
+            "label": item.get("label", "matang"),
+            "confidence": str(item.get("confidence", 0.96)),
+            "metode": item.get("metode", "realtime_hsv"),
+            "fitur": item.get("fitur", ""),
+        }
+
+        for k, v in fields.items():
+            body_parts.append(f"--{boundary}\r\n".encode("utf-8"))
+            body_parts.append(f'Content-Disposition: form-data; name="{k}"\r\n\r\n'.encode("utf-8"))
+            body_parts.append(f"{v}\r\n".encode("utf-8"))
+
+        crop_bgr = item.get("crop_bgr")
+        if crop_bgr is not None and crop_bgr.size > 0:
+            sukses_encode, jpg_buffer = cv2.imencode(".jpg", crop_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            if sukses_encode:
+                nama_file = f"tomat_{int(time.time())}.jpg"
+                body_parts.append(f"--{boundary}\r\n".encode("utf-8"))
+                body_parts.append(f'Content-Disposition: form-data; name="foto"; filename="{nama_file}"\r\n'.encode("utf-8"))
+                body_parts.append(b"Content-Type: image/jpeg\r\n\r\n")
+                body_parts.append(jpg_buffer.tobytes())
+                body_parts.append(b"\r\n")
+
+        body_parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+        payload_bytes = b"".join(body_parts)
+
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(payload_bytes)),
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Connection": "close",
+        }
+
+        # Percobaan pengiriman dengan auto-retry (maksimal 3 kali)
+        for attempt in range(1, 4):
+            req = urllib.request.Request(self.url, data=payload_bytes, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=6.0) as resp:
+                    status_code = resp.status
+                    if status_code in (200, 201):
+                        print(f"[WEB API] Upload data berhasil ({status_code}) pada percobaan ke-{attempt}: {item.get('label')}")
+                        return True
+            except urllib.error.HTTPError as http_err:
+                # Otomatis beralih jika server PHP dijalankan di root (/web/api/klasifikasi.php) vs di folder web (/api/klasifikasi.php)
+                if http_err.code == 404 and ("127.0.0.1" in self.url or "localhost" in self.url):
+                    if "/web/api/" in self.url:
+                        alt_url = self.url.replace("/web/api/", "/api/")
+                    else:
+                        alt_url = self.url.replace("/api/", "/web/api/")
+                    print(f"[WEB API INFO] Endpoint 404 terdeteksi, otomatis beralih ke: {alt_url}")
+                    self.url = alt_url
+                    continue
+                if attempt < 3:
+                    print(f"[WEB API WARN] Percobaan {attempt} gagal ({http_err}), mencoba ulang dalam 1.0 detik...")
+                    time.sleep(1.0)
+                else:
+                    print(f"[WEB API ERROR] Gagal mengirim data ke server web setelah 3 percobaan: {http_err}")
+            except Exception as e:
+                if attempt < 3:
+                    print(f"[WEB API WARN] Percobaan {attempt} gagal ({e}), mencoba ulang dalam 1.0 detik...")
+                    time.sleep(1.0)
+                else:
+                    print(f"[WEB API ERROR] Gagal mengirim data ke server web setelah 3 percobaan: {e}")
+
+        # Fallback offline journaling: Catat ke file lokal agar tidak ada data yang hilang saat server offline
+        try:
+            cadangan = {
+                "waktu": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "label": item.get("label"),
+                "confidence": item.get("confidence"),
+                "metode": item.get("metode"),
+                "fitur": item.get("fitur"),
+            }
+            with open(self.offline_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(cadangan) + "\n")
+            print(f"[WEB API OFFLINE] Data klasifikasi tersimpan aman di file cadangan lokal: {self.offline_file}")
+        except Exception as file_err:
+            print(f"[WEB API ERROR] Gagal menulis cadangan offline: {file_err}")
+
+        return False
+
+    def get_status(self):
+        with self.lock:
+            return self.status_terakhir, self.total_terkirim
+
+    def stop(self):
+        self.running = False
+
+
+web_worker = None
+if WEB_API_ENABLED:
+    web_worker = WebAPIWorker(url=WEB_API_URL, enabled=True, throttle_detik=WEB_API_THROTTLE_DETIK)
+    web_worker.start()
+    print(f"[WEB API] Background worker aktif -> Target URL: {WEB_API_URL}")
 
 
 # ============================================================
@@ -380,7 +607,7 @@ def telusuri_tree(model, fitur):
 # ============================================================
 # TAMPILKAN HASIL
 # ============================================================
-def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor="-", fps=0.0, bbox=None, in_zone=False):
+def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor="-", fps=0.0, bbox=None, in_zone=False, ir_count=0, web_status="STANDBY"):
 
     tinggi, lebar = frame.shape[:2]
 
@@ -476,7 +703,7 @@ def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor=
     )
 
     # Indikator status koneksi ESP32 & sensor konveyor
-    is_connected = port_info and "COM" in str(port_info).upper()
+    is_connected = port_info and ("COM" in str(port_info).upper() or "TTY" in str(port_info).upper())
     status_warna = (0, 255, 0) if is_connected else (100, 100, 255)
     status_teks = f"ESP32: {port_info}"
     cv2.putText(
@@ -489,14 +716,27 @@ def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor=
         1,
     )
 
-    sensor_teks = f"Sensor: {status_sensor}"
+    sensor_teks = f"IR Count: {ir_count} | Sensor: {status_sensor}"
     cv2.putText(
         panel,
         sensor_teks,
-        (280, 85),
+        (230, 85),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.42,
+        0.40,
         (220, 220, 220),
+        1,
+    )
+
+    # Indikator status Web API / cPanel
+    web_teks = f"Web API: {web_status}"
+    web_warna = (0, 255, 0) if ("SUKSES" in str(web_status) or "STANDBY" in str(web_status)) else (0, 165, 255)
+    cv2.putText(
+        panel,
+        web_teks,
+        (20, 108),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.40,
+        web_warna,
         1,
     )
 
@@ -504,7 +744,7 @@ def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor=
     # INFORMASI PROSES DECISION TREE
     # ========================================================
 
-    y = 115
+    y = 136
 
     cv2.putText(
         panel,
@@ -732,8 +972,11 @@ if __name__ == "__main__":
             frame_count = 0
             t_awal = waktu_sekarang
 
-        # Ambil nilai sensor proximity dari background thread secara instan (0 ms)
+        # Ambil nilai sensor proximity dan status trigger IR secara instan (0 ms)
         respon_sensor = serial_worker.get_sensor() if serial_worker else "-"
+        ir_terpicu = serial_worker.pop_ir_trigger() if serial_worker else False
+        if ir_terpicu:
+            print("[SENSOR IR] Buah tomat fisik terkonfirmasi melewati sensor proximity!")
 
         ret, frame = kamera.read()
 
@@ -775,14 +1018,48 @@ if __name__ == "__main__":
                 "warna_bgr": (0, 255, 0),
             })
 
-            # 4. Kirim ke ESP32 tepat SATU KALI per objek tomat ketika sudah stabil & cooldown selesai
-            if (not sudah_dieksekusi_untuk_objek_ini) and (count >= 4) and (waktu_sekarang - waktu_kirim_terakhir >= COOLDOWN_SERVO):
+            # 4. Syarat konfirmasi: Cukup 2 frame jika sensor IR mendeteksi objek fisik,
+            # atau 4 frame jika murni mengandalkan deteksi visual kamera
+            syarat_frame = 2 if ir_terpicu else 4
+
+            # Kirim ke ESP32 tepat SATU KALI per objek tomat ketika sudah stabil & cooldown selesai
+            if (not sudah_dieksekusi_untuk_objek_ini) and (count >= syarat_frame) and (waktu_sekarang - waktu_kirim_terakhir >= COOLDOWN_SERVO):
                 print(f"[INFO] Prediksi Terkonfirmasi: {hasil} ({info_kelas['label_ui']}) -> Mengirim: '{info_kelas['command']}'")
 
                 if serial_worker and serial_worker.is_connected():
                     serial_worker.send(info_kelas["command"])
                 else:
                     print(f"[SERIAL] ESP32 tidak terhubung, perintah '{info_kelas['command']}' dilewati.")
+
+                # Ekstraksi spektrum HSV fisik nyata dari tomat untuk dikirim ke web dashboard
+                try:
+                    hsv_crop = cv2.cvtColor(crop_tomat, cv2.COLOR_BGR2HSV)
+                    mean_h = float(np.mean(hsv_crop[:, :, 0]))
+                    mean_s = float(np.mean(hsv_crop[:, :, 1]))
+                    mean_v = float(np.mean(hsv_crop[:, :, 2]))
+                    mask_valid = (hsv_crop[:, :, 1] > 40) & (hsv_crop[:, :, 2] > 40)
+                    if np.count_nonzero(mask_valid) > 0:
+                        valid_hues = hsv_crop[:, :, 0][mask_valid]
+                        tot = len(valid_hues)
+                        r_pct = (np.count_nonzero((valid_hues < 14) | (valid_hues >= 165)) / tot) * 100.0
+                        k_pct = (np.count_nonzero((valid_hues >= 14) & (valid_hues < 34)) / tot) * 100.0
+                        h_pct = (np.count_nonzero((valid_hues >= 34) & (valid_hues <= 85)) / tot) * 100.0
+                    else:
+                        r_pct, k_pct, h_pct = 0.0, 0.0, 0.0
+
+                    ringkasan_fitur = f"H:{mean_h:.1f}, S:{mean_s:.1f}, V:{mean_v:.1f} (R:{r_pct:.1f}%, K:{k_pct:.1f}%, H:{h_pct:.1f}%)"
+                except Exception:
+                    ringkasan_fitur = f"Kelas {hasil} ({info_kelas['label_ui']})"
+
+                # Kirim data klasifikasi real & foto tomat ke Web API / cPanel secara non-blocking
+                if web_worker:
+                    web_worker.send(
+                        label=info_kelas["command"],
+                        confidence=0.96,
+                        metode="realtime_hsv",
+                        fitur=ringkasan_fitur,
+                        crop_bgr=crop_tomat if KIRIM_FOTO_TOMAT else None,
+                    )
 
                 sudah_dieksekusi_untuk_objek_ini = True
                 last_hasil = hasil
@@ -806,7 +1083,21 @@ if __name__ == "__main__":
         # ====================================================
 
         status_port = serial_worker.port_name if (serial_worker and serial_worker.is_connected()) else "TIDAK TERHUBUNG"
-        output = tampilkan(frame, langkah, hasil, port_info=status_port, status_sensor=respon_sensor, fps=fps_hitung, bbox=bbox, in_zone=in_zone)
+        total_ir = serial_worker.get_ir_count() if serial_worker else 0
+        status_web = web_worker.get_status()[0] if web_worker else "OFF"
+
+        output = tampilkan(
+            frame,
+            langkah,
+            hasil,
+            port_info=status_port,
+            status_sensor=respon_sensor,
+            fps=fps_hitung,
+            bbox=bbox,
+            in_zone=in_zone,
+            ir_count=total_ir,
+            web_status=status_web,
+        )
 
         cv2.imshow(window_name, output)
 
@@ -822,6 +1113,10 @@ if __name__ == "__main__":
     # ========================================================
     # CLEANUP
     # ========================================================
+
+    if web_worker:
+        web_worker.stop()
+        print("[WEB API] Worker web dimatikan.")
 
     if serial_worker:
         serial_worker.stop()
