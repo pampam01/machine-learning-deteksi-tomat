@@ -876,6 +876,148 @@ def tampilkan(frame, langkah, hasil, port_info="TIDAK TERHUBUNG", status_sensor=
 
 
 # ============================================================
+# PENANGANAN & PENCARIAN KAMERA OTOMATIS (LINUX / PI / WINDOWS)
+# ============================================================
+def dapatkan_kandidat_kamera_linux():
+    """
+    Mendeteksi semua perangkat video di /sys/class/video4linux/
+    Memfilter node codec/isp Raspberry Pi agar webcam USB nyata diprioritaskan.
+    """
+    import glob
+    kandidat = []
+    video_dirs = sorted(glob.glob("/sys/class/video4linux/video*"))
+
+    for vdir in video_dirs:
+        vname = os.path.basename(vdir)
+        dev_node = f"/dev/{vname}"
+        try:
+            idx = int(vname.replace("video", ""))
+        except ValueError:
+            continue
+
+        nama_perangkat = ""
+        name_path = os.path.join(vdir, "name")
+        if os.path.isfile(name_path):
+            try:
+                with open(name_path, "r", errors="ignore") as f:
+                    nama_perangkat = f.read().strip()
+            except Exception:
+                pass
+
+        # Identifikasi apakah node ini adalah codec/isp Raspberry Pi
+        nama_lower = nama_perangkat.lower()
+        is_codec = any(x in nama_lower for x in ["codec", "isp", "m2m", "meta", "dummy", "decod", "encod"])
+
+        kandidat.append({
+            "index": idx,
+            "node": dev_node,
+            "nama": nama_perangkat or vname,
+            "is_codec": is_codec,
+        })
+
+    # Prioritaskan kamera nyata (non-codec) di depan
+    utama = [k for k in kandidat if not k["is_codec"]]
+    cadangan = [k for k in kandidat if k["is_codec"]]
+    return utama + cadangan
+
+
+def buka_kamera_otomatis():
+    """
+    Pencarian dan pembukaan kamera otomatis multi-platform (Windows & Linux / Raspberry Pi OS).
+    Mencoba membuka node kamera nyata dengan validasi pembacaan frame (test frame).
+    Mendukung USB Webcam (V4L2 / DSHOW) dan CSI Pi Camera (libcamerasrc GStreamer).
+    """
+    print("=" * 60)
+    print("[KAMERA] Memulai inisialisasi dan pemindaian kamera...")
+    print("=" * 60)
+
+    if IS_LINUX:
+        kandidat_linux = dapatkan_kandidat_kamera_linux()
+        if kandidat_linux:
+            print(f"[KAMERA] Node video terdeteksi di Linux ({len(kandidat_linux)} node):")
+            for k in kandidat_linux:
+                tag = "(Codec/ISP)" if k["is_codec"] else "(Kamera Nyata)"
+                print(f"  - {k['node']} (Index {k['index']}): '{k['nama']}' {tag}")
+        else:
+            print("[KAMERA] PERINGATAN: Tidak ada node /sys/class/video4linux terdeteksi.")
+
+        # Coba buka dari daftar kandidat kamera nyata terlebih dahulu
+        for item in kandidat_linux:
+            idx = item["index"]
+            node = item["node"]
+            nama = item["nama"]
+
+            # Uji pembukaan dengan backend V4L2 eksplisit agar OpenCV tidak fallback ke FFMPEG
+            metode_uji = [
+                (node, cv2.CAP_V4L2, f"V4L2 via Path '{node}'"),
+                (idx, cv2.CAP_V4L2, f"V4L2 via Index {idx}"),
+                (node, None, f"Default via Path '{node}'"),
+            ]
+
+            for target, backend, label in metode_uji:
+                try:
+                    cap = cv2.VideoCapture(target, backend) if backend is not None else cv2.VideoCapture(target)
+                    if cap.isOpened():
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None and test_frame.size > 0:
+                            print(f"[KAMERA] BERHASIL membuka kamera: '{nama}' ({label})")
+                            return cap, f"{node} ('{nama}')"
+                        cap.release()
+                except Exception:
+                    pass
+
+        # Fallback index standar Linux jika sysfs tidak menyediakan nama
+        for fallback_idx in [0, 1, 2, 4]:
+            try:
+                cap = cv2.VideoCapture(fallback_idx, cv2.CAP_V4L2)
+                if cap.isOpened():
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None and test_frame.size > 0:
+                        print(f"[KAMERA] Berhasil membuka kamera di fallback index {fallback_idx}")
+                        return cap, fallback_idx
+                    cap.release()
+            except Exception:
+                pass
+
+        # Fallback CSI Camera: GStreamer libcamerasrc (untuk Raspberry Pi Camera Module)
+        try:
+            gst_pipeline = (
+                "libcamerasrc ! video/x-raw, width=640, height=480, framerate=30/1 "
+                "! videoconvert ! appsink drop=true"
+            )
+            cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            if cap.isOpened():
+                ret, test_frame = cap.read()
+                if ret and test_frame is not None and test_frame.size > 0:
+                    print("[KAMERA] Berhasil membuka Raspberry Pi CSI Camera via GStreamer libcamerasrc!")
+                    return cap, "CSI (libcamerasrc)"
+                cap.release()
+        except Exception:
+            pass
+
+    else:
+        # Platform Windows
+        indeks_coba = [INDEX_KAMERA, 0 if INDEX_KAMERA == 1 else 1, 2, 3]
+        backends = [cv2.CAP_DSHOW, cv2.CAP_ANY]
+
+        for idx in indeks_coba:
+            for backend in backends:
+                try:
+                    cap = cv2.VideoCapture(idx, backend)
+                    if cap.isOpened():
+                        ret, test_frame = cap.read()
+                        if ret and test_frame is not None and test_frame.size > 0:
+                            backend_name = cap.getBackendName()
+                            print(f"[KAMERA] Berhasil membuka kamera di index {idx} (Backend: {backend_name})")
+                            return cap, idx
+                        cap.release()
+                except Exception:
+                    pass
+
+    return None, None
+
+
+# ============================================================
 # MAIN
 # ============================================================
 if __name__ == "__main__":
@@ -916,40 +1058,64 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # ========================================================
-    # KAMERA (OPTIMASI LOGITECH C270 HD WEBCAM)
+    # KAMERA (OPTIMASI LOGITECH & WEBCAM UMUM)
     # ========================================================
 
-    print(f"[INFO] Membuka kamera Logitech (index {INDEX_KAMERA}, backend: {'V4L2 (Linux)' if IS_LINUX else 'DSHOW (Windows)'})...")
-    kamera = cv2.VideoCapture(INDEX_KAMERA, BACKEND_KAMERA)
+    kamera, active_idx = buka_kamera_otomatis()
 
-    if not kamera.isOpened():
-        fallback_idx = 0 if INDEX_KAMERA == 1 else 1
-        print(f"[WARN] Kamera index {INDEX_KAMERA} gagal dibuka, mencoba index {fallback_idx}...")
-        kamera = cv2.VideoCapture(fallback_idx, BACKEND_KAMERA)
+    if kamera is None or not kamera.isOpened():
+        print("=" * 60)
+        print("[ERROR] Kamera tidak dapat dibuka pada semua metode dan index yang dicoba.")
+        if IS_LINUX:
+            print("-" * 60)
+            print("PANDUAN PENYELESAIAN MASALAH KAMERA DI RASPBERRY PI:")
+            print("-" * 60)
+            print("1. PERIKSA KONEKSI FISIK WEBCAM USB:")
+            print("   - Cabut dan colokkan kembali webcam ke port USB Raspberry Pi.")
+            print("   - Cek apakah terdeteksi di USB dengan perintah terminal: lsusb")
+            print("2. PERIKSA IZIN AKSES PERANGKAT VIDEO (PERMISSION):")
+            print("   - Berikan user izin akses group video:")
+            print("     sudo usermod -a -G video $USER")
+            print("   - Dan buka izin baca/tulis sementara:")
+            print("     sudo chmod 666 /dev/video*")
+            print("   - Kemudian reboot jika baru menambahkan group: sudo reboot")
+            print("3. PERIKSA DAFTAR PERANGKAT VIDEO:")
+            print("   - Jalankan: v4l2-ctl --list-devices")
+            print("     (Jika belum terpasang: sudo apt install -y v4l-utils)")
+            print("4. JIKA MENGGUNAKAN RASPBERRY PI CAMERA MODULE (KABEL FLEKSIBEL / CSI):")
+            print("   - Jalankan program dengan wrapper libcamerify:")
+            print("     libcamerify ./jalankan.sh   atau   libcamerify python3 utama_hsv.py")
+            print("-" * 60)
+        else:
+            print("Pastikan webcam USB terhubung dan tidak sedang digunakan aplikasi lain.")
+        print("=" * 60)
+        exit(1)
 
-    if not kamera.isOpened():
-        print("[ERROR] Kamera tidak dapat dibuka. Pastikan webcam terhubung dan tidak sedang digunakan aplikasi lain.")
-        exit()
-
-    # Tiga kunci agar Logitech C270 berjalan halus di 30 FPS tanpa patah-patah:
-    # 1. Codec MJPG: Mengaktifkan kompresi hardware bawaan kamera C270 (sangat ringan di USB 2.0)
-    # 2. Resolusi standar 640x480: Menjamin 30 FPS stabil dan CPU tetap dingin
-    # 3. Buffer Size 1: Mencegah delay/lag antrean frame, tampilan selalu realtime
-    kamera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    # Optimasi kamera agar berjalan halus di 30 FPS tanpa patah-patah:
+    try:
+        kamera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    except Exception:
+        pass
     kamera.set(cv2.CAP_PROP_FRAME_WIDTH, UKURAN_FRAME[0])
     kamera.set(cv2.CAP_PROP_FRAME_HEIGHT, UKURAN_FRAME[1])
-    kamera.set(cv2.CAP_PROP_FPS, 30)
-    kamera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    try:
+        kamera.set(cv2.CAP_PROP_FPS, 30)
+    except Exception:
+        pass
+    try:
+        kamera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    except Exception:
+        pass
 
     print("[INFO] Menstabilkan sensor auto-exposure kamera...")
-    # Warmup beberapa frame awal agar sensor auto-exposure (RightLight) Logitech stabil
+    # Warmup beberapa frame awal agar sensor auto-exposure stabil
     for _ in range(10):
         kamera.read()
         time.sleep(0.01)
 
     lebar_aktif = int(kamera.get(cv2.CAP_PROP_FRAME_WIDTH))
     tinggi_aktif = int(kamera.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"[INFO] Kamera aktif (Backend: {kamera.getBackendName()}, Resolusi: {lebar_aktif}x{tinggi_aktif})")
+    print(f"[INFO] Kamera aktif pada index {active_idx} (Backend: {kamera.getBackendName()}, Resolusi: {lebar_aktif}x{tinggi_aktif})")
 
     # ========================================================
     # WINDOW

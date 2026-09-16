@@ -27,8 +27,22 @@ else
     echo "[INFO] Menggunakan Python sistem..."
 fi
 
+# Cek izin akses video jika ada node /dev/video
+if [ -e /dev/video0 ] && [ ! -r /dev/video0 ]; then
+    echo "[PERINGATAN] User $(whoami) belum memiliki izin baca /dev/video0."
+    echo "[INFO] Membuka izin akses /dev/video*..."
+    sudo chmod 666 /dev/video* 2>/dev/null || true
+fi
+
 echo "[INFO] Menjalankan sistem pemilah tomat C4.5..."
-python3 utama_hsv.py
+
+# Cek apakah modul kamera Pi libcamera digunakan tanpa webcam USB
+if command -v libcamerify >/dev/null 2>&1 && [ ! -e /dev/video0 ]; then
+    echo "[INFO] Menjalankan via libcamerify untuk kamera Raspberry Pi..."
+    libcamerify python3 utama_hsv.py
+else
+    python3 utama_hsv.py
+fi
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
