@@ -43,6 +43,9 @@ UKURAN_FRAME = (640, 480)
 # True = Mirror (Efek cermin / selfie kamera)
 MIRROR_KAMERA = False
 
+# Deteksi Otomatis Mode Headless (Aktif saat Raspberry Pi berjalan tanpa monitor HDMI)
+HEADLESS = bool(os.environ.get("HEADLESS")) or (IS_LINUX and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"))
+
 # ============================================================
 # KONFIGURASI WEB API / CPANEL & SENSOR IR
 # ============================================================
@@ -1098,34 +1101,17 @@ if __name__ == "__main__":
     kamera, active_idx = buka_kamera_otomatis()
 
     if kamera is None or not kamera.isOpened():
-        print("=" * 60)
-        print("[ERROR] KAMERA TIDAK DAPAT DITEMUKAN ATAU DIBUKA!")
         if IS_LINUX:
-            print("-" * 60)
-            print("PANDUAN PEMERIKSAAN HARDWARE KAMERA DI RASPBERRY PI:")
-            print("-" * 60)
-            print("A. JIKA ANDA MENGGUNAKAN WEBCAM USB:")
-            print("   1. Cek apakah webcam USB terdeteksi oleh sistem dengan perintah:")
-            print("      lsusb")
-            print("      (Pastikan nama webcam muncul di daftar perangkat USB)")
-            print("   2. Coba cabut dan colokkan ke port USB Raspberry Pi yang lain (disarankan port USB 3.0 warna biru).")
-            print("   3. Berikan izin akses group video:")
-            print("      sudo usermod -a -G video $USER")
-            print("      sudo chmod 666 /dev/video* 2>/dev/null || true")
-            print()
-            print("B. JIKA ANDA MENGGUNAKAN MODUL KAMERA RASPBERRY PI (KABEL PITA CSI):")
-            print("   1. Raspberry Pi OS Bookworm/Bullseye menggunakan driver 'libcamera'.")
-            print("   2. Cek apakah modul pita kamera terdeteksi oleh sistem:")
-            print("      rpicam-hello --list-cameras   atau   libcamera-hello --list-cameras")
-            print("   3. Jika modul terdeteksi, jalankan sistem menggunakan wrapper libcamerify:")
-            print("      libcamerify ./jalankan.sh")
-            print("      atau:")
-            print("      libcamerify python3 utama_hsv.py")
-            print("-" * 60)
+            print("[AUTO-START] Menunggu perangkat kamera USB dicolokkan ke Raspberry Pi...")
+            while kamera is None or not kamera.isOpened():
+                time.sleep(2.0)
+                kamera, active_idx = buka_kamera_otomatis()
         else:
+            print("=" * 60)
+            print("[ERROR] KAMERA TIDAK DAPAT DITEMUKAN ATAU DIBUKA!")
             print("Pastikan webcam USB terhubung dan tidak sedang digunakan aplikasi lain.")
-        print("=" * 60)
-        exit(1)
+            print("=" * 60)
+            exit(1)
 
     # Optimasi kamera agar berjalan halus di 30 FPS tanpa patah-patah:
     try:
@@ -1154,12 +1140,19 @@ if __name__ == "__main__":
     print(f"[INFO] Kamera aktif pada index {active_idx} (Backend: {kamera.getBackendName()}, Resolusi: {lebar_aktif}x{tinggi_aktif})")
 
     # ========================================================
-    # WINDOW
+    # WINDOW (HANYA DIBUAT JIKA TERSEDIA MONITOR / LAYAR GUI)
     # ========================================================
 
     window_name = "C4.5 - Prediksi Realtime"
 
-    cv2.namedWindow(window_name)
+    if not HEADLESS:
+        cv2.namedWindow(window_name)
+    else:
+        print("=" * 60)
+        print("[INFO] MODE HEADLESS AKTIF (Tanpa Layar HDMI)")
+        print("Sistem berjalan otomatis di latar belakang.")
+        print("Status pemilahan & jumlah tomat dipantau langsung di LCD ESP32 & Web.")
+        print("=" * 60)
 
     # ========================================================
     # LOOP VIDEO
@@ -1178,11 +1171,17 @@ if __name__ == "__main__":
     t_awal = time.time()
     frame_count = 0
     fps_hitung = 0.0
+    last_serial_retry = time.time()
 
     print("[INFO] Memulai loop video... Tekan 'Q' untuk keluar.")
 
     while True:
         waktu_sekarang = time.time()
+
+        # Auto-reconnect Serial ESP32 jika belum tersambung / kabel baru dicolokkan (Hotplug)
+        if (serial_worker is None or not serial_worker.is_connected()) and (waktu_sekarang - last_serial_retry >= 3.0):
+            last_serial_retry = waktu_sekarang
+            serial_worker = init_serial()
 
         # Hitung FPS secara berkala
         frame_count += 1
@@ -1315,24 +1314,27 @@ if __name__ == "__main__":
             web_status=status_web,
         )
 
-        cv2.imshow(window_name, output)
+        if not HEADLESS:
+            cv2.imshow(window_name, output)
 
-        # ====================================================
-        # KEYBOARD
-        # ====================================================
+            # ====================================================
+            # KEYBOARD
+            # ====================================================
 
-        tombol = cv2.waitKey(1) & 0xFF
+            tombol = cv2.waitKey(1) & 0xFF
 
-        if tombol == ord("q"):
-            break
-        elif tombol == ord("m"):
-            MIRROR_KAMERA = not MIRROR_KAMERA
-            status_str = "AKTIF (Efek Cermin)" if MIRROR_KAMERA else "NONAKTIF (Arah Fisik Asli)"
-            print(f"[INFO] Tampilan Mirror: {status_str}")
-        elif tombol == ord("r"):
-            if serial_worker and serial_worker.is_connected():
-                serial_worker.send("reset_tomat")
-                print("[SERIAL] Reset counter tomat dikirim ke ESP32 LCD.")
+            if tombol == ord("q"):
+                break
+            elif tombol == ord("m"):
+                MIRROR_KAMERA = not MIRROR_KAMERA
+                status_str = "AKTIF (Efek Cermin)" if MIRROR_KAMERA else "NONAKTIF (Arah Fisik Asli)"
+                print(f"[INFO] Tampilan Mirror: {status_str}")
+            elif tombol == ord("r"):
+                if serial_worker and serial_worker.is_connected():
+                    serial_worker.send("reset_tomat")
+                    print("[SERIAL] Reset counter tomat dikirim ke ESP32 LCD.")
+        else:
+            time.sleep(0.005)
 
     # ========================================================
     # CLEANUP
@@ -1347,4 +1349,5 @@ if __name__ == "__main__":
         print("[SERIAL] Koneksi serial ditutup.")
 
     kamera.release()
-    cv2.destroyAllWindows()
+    if not HEADLESS:
+        cv2.destroyAllWindows()
