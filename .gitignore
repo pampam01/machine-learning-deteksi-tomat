@@ -1,5 +1,7 @@
 .agents/
-__pycache__
+__pycache__/
+*.pyc
+*.pyo
 Tomato.v3i.yolov8.zip
 tiara-tomata.rar
 graphify-out/
@@ -7,6 +9,9 @@ Tomato.v3i.yolov8/
 crops/
 crops/*
 .venv/
+venv/
+env/
+ENV/
 
 # Uploads Web & Foto Tomat
 web/uploads/foto/*
