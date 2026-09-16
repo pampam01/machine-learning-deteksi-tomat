@@ -218,6 +218,11 @@ class ESP32Worker(threading.Thread):
         self.running = False
         try:
             if self.ser and self.ser.is_open:
+                try:
+                    self.ser.write(b"mati\n")
+                    time.sleep(0.05)
+                except Exception:
+                    pass
                 self.ser.close()
         except Exception:
             pass
@@ -234,20 +239,32 @@ def init_serial():
             continue
         try:
             print(f"[SERIAL] Mengecek port {port.device}: {port.description} (Baud: {BAUD_RATE_ESP32})")
-            temp_ser = serial.Serial(port.device, BAUD_RATE_ESP32, timeout=0.4)
-            time.sleep(1.8)  # Tunggu inisialisasi boot hardware ESP32
-            temp_ser.reset_input_buffer()
-            temp_ser.write(b"go\n")
-            time.sleep(0.2)
-            for _ in range(3):
-                resp = temp_ser.readline().decode(errors="ignore").strip()
-                if "ok" in resp.lower():
-                    print(f"[SERIAL] Berhasil terhubung ke {port.device} ({port.description})")
-                    worker = ESP32Worker(temp_ser, port.device)
-                    worker.start()
-                    return worker
-            temp_ser.close()
-        except Exception:
+            temp_ser = serial.Serial(port.device, BAUD_RATE_ESP32, timeout=0.25)
+            # ESP32 auto-reset saat serial dibuka (DTR/RTS).
+            # Lakukan handshake aktif berulang selama s/d 4.5 detik
+            t_mulai = time.time()
+            terhubung = False
+            while time.time() - t_mulai < 4.5:
+                temp_ser.write(b"go\n")
+                time.sleep(0.2)
+                while temp_ser.in_waiting:
+                    baris = temp_ser.readline().decode(errors="ignore").strip().lower()
+                    if "ok" in baris or "esp32_ready" in baris:
+                        terhubung = True
+                        break
+                if terhubung:
+                    break
+                time.sleep(0.15)
+
+            if terhubung:
+                print(f"[SERIAL] Berhasil terhubung ke {port.device} ({port.description})")
+                worker = ESP32Worker(temp_ser, port.device)
+                worker.start()
+                return worker
+            else:
+                temp_ser.close()
+        except Exception as e:
+            print(f"[SERIAL] Gagal membuka {port.device}: {e}")
             continue
 
     print("[SERIAL] Tidak ada ESP32 yang terhubung. Mode kamera mandiri aktif.")
@@ -1104,6 +1121,10 @@ if __name__ == "__main__":
 
         if tombol == ord("q"):
             break
+        elif tombol == ord("r"):
+            if serial_worker and serial_worker.is_connected():
+                serial_worker.send("reset_tomat")
+                print("[SERIAL] Reset counter tomat dikirim ke ESP32 LCD.")
 
     # ========================================================
     # CLEANUP

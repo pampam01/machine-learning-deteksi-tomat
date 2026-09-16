@@ -34,7 +34,7 @@ def main():
         while ser.in_waiting:
             print("ESP32:", ser.readline().decode(errors="ignore").strip())
 
-    print("\nPILIHAN UJI CEPAT S-CURVE (TORSI PROFESIONAL):")
+    print("\nPILIHAN UJI CEPAT S-CURVE & LCD I2C:")
     print(" [1] Gerak S-Curve Servo 1 ke 0 derajat   (Matang / Buang Kiri)")
     print(" [2] Gerak S-Curve Servo 1 ke 90 derajat  (Standby / Lurus Dinding Kiri)")
     print(" [3] Gerak S-Curve Servo 2 ke 90 derajat  (Setengah Matang / Buang Kanan ke Tengah)")
@@ -42,12 +42,16 @@ def main():
     print(" [m] Siklus Matang: Buka S-Curve -> Tahan 0.8s -> Tutup S-Curve (Servo 1)")
     print(" [k] Siklus Setengah Matang: Buka S-Curve -> Tahan 0.8s -> Tutup S-Curve (Servo 2)")
     print(" [t] Uji Berurutan Kedua Servo (Test Sequence)")
+    print(" [h] LCD: Ubah Status Sistem ke HIDUP")
+    print(" [x] LCD: Ubah Status Sistem ke MATI")
+    print(" [r] LCD: Reset Jumlah Tomat ke 0")
+    print(" [s] LCD: Cek Status & Jumlah Tomat Saat Ini")
     print(" [q] Keluar")
     print("-" * 60)
 
     try:
         while True:
-            pilih = input("\nMasukkan pilihan [1/2/3/4/m/k/t/q]: ").strip().lower()
+            pilih = input("\nMasukkan pilihan [1/2/3/4/m/k/t/h/x/r/s/q]: ").strip().lower()
             if pilih == "1":
                 print("Mengirim: s1 0 (S-Curve)")
                 send_cmd("s1 0")
@@ -61,13 +65,13 @@ def main():
                 print("Mengirim: s2 0 (S-Curve)")
                 send_cmd("s2 0")
             elif pilih == "m":
-                print("Mengirim: matang (Siklus Penuh S-Curve)")
+                print("Mengirim: matang (Siklus Penuh S-Curve + Tambah Counter)")
                 send_cmd("matang")
                 time.sleep(2.0)
                 while ser.in_waiting:
                     print("ESP32:", ser.readline().decode(errors="ignore").strip())
             elif pilih == "k":
-                print("Mengirim: setengah_matang (Siklus Penuh S-Curve)")
+                print("Mengirim: setengah_matang (Siklus Penuh S-Curve + Tambah Counter)")
                 send_cmd("setengah_matang")
                 time.sleep(2.0)
                 while ser.in_waiting:
@@ -78,6 +82,18 @@ def main():
                 time.sleep(3.5)
                 while ser.in_waiting:
                     print("ESP32:", ser.readline().decode(errors="ignore").strip())
+            elif pilih == "h":
+                print("Mengirim: hidup (LCD Status HIDUP)")
+                send_cmd("hidup")
+            elif pilih == "x":
+                print("Mengirim: mati (LCD Status MATI)")
+                send_cmd("mati")
+            elif pilih == "r":
+                print("Mengirim: reset_tomat (Reset Counter Tomat)")
+                send_cmd("reset_tomat")
+            elif pilih == "s":
+                print("Mengirim: status")
+                send_cmd("status")
             elif pilih == "q":
                 break
             else:

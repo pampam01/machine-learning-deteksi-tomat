@@ -115,8 +115,11 @@ include __DIR__ . '/../includes/header.php';
             <button type="button" class="btn btn-warning" id="btnResetCounter" onclick="handleResetCounter()">
                 🔄 Reset Counter
             </button>
-            <button type="button" class="btn btn-outline btn-sm" id="btnClearData" onclick="clearIncomingData()">
-                🧹 Bersihkan Data Masuk
+            <button type="button" class="btn btn-outline btn-sm" id="btnClearData" onclick="clearIncomingData()" title="Sembunyikan data saat ini dari tampilan realtime">
+                🧹 Bersihkan Tampilan
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" id="btnRestoreData" onclick="restoreClearedData()" style="display: none;" title="Tampilkan kembali seluruh data yang disembunyikan">
+                👁️ Tampilkan Semua Data
             </button>
         </div>
     </div>
@@ -154,6 +157,16 @@ const filterDate = '<?= $filter_date ?>';
 let clearedUntilId = 0;
 let isFirstLoad = true;
 
+// Helper escapeHtml agar aman jika dipanggil sebelum atau sesudah main.js
+function escapeHtml(str) {
+    if (typeof window.escapeHtml === 'function') {
+        return window.escapeHtml(str);
+    }
+    return (str || '').replace(/[&<>"']/g, function (m) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+    });
+}
+
 // Toast notification helper
 function showToast(message, type = 'success') {
     const toast = document.getElementById('toastNotification');
@@ -187,18 +200,34 @@ function clearIncomingData() {
         clearedUntilId = topId;
         localStorage.setItem('clearedUntilId_' + filterDate, topId);
     }
+    const btnRestore = document.getElementById('btnRestoreData');
+    if (btnRestore) btnRestore.style.display = 'inline-flex';
     renderEmptyState('Tampilan data masuk telah dibersihkan. Menunggu data baru...');
     showToast('Tampilan data masuk berhasil dibersihkan.', 'info');
 }
 
+// Tampilkan kembali seluruh data yang sempat disembunyikan
+function restoreClearedData() {
+    clearedUntilId = 0;
+    localStorage.removeItem('clearedUntilId_' + filterDate);
+    const btnRestore = document.getElementById('btnRestoreData');
+    if (btnRestore) btnRestore.style.display = 'none';
+    fetchRealtimeData();
+    showToast('Semua data masuk kembali ditampilkan.', 'info');
+}
+
 function renderEmptyState(msg) {
     const tbody = document.getElementById('recentTableBody');
-    tbody.innerHTML = '';
+    let extraHtml = '';
+    if (clearedUntilId > 0) {
+        extraHtml = `<div style="margin-top:10px;"><button type="button" class="btn btn-outline btn-sm" onclick="restoreClearedData()">👁️ Tampilkan Kembali Data yang Disembunyikan</button></div>`;
+    } else {
+        extraHtml = `<div style="margin-top:6px; font-size:0.85rem; color:var(--gray-500);">💡 Data historis sebelumnya tersimpan lengkap di menu <a href="${BASE_URL}/pages/riwayat.php" style="color:var(--primary); font-weight:600; text-decoration:underline;">Riwayat Data</a></div>`;
+    }
+    tbody.innerHTML = `<tr><td colspan="9" class="text-center py-4" style="color:var(--gray-600);">${msg || 'Belum ada data masuk pada tanggal ini'}${extraHtml}</td></tr>`;
     const emptyState = document.getElementById('emptyDataState');
-    const emptyMsg = document.getElementById('emptyStateMessage');
-    if (emptyState && emptyMsg) {
-        emptyMsg.textContent = msg || 'Belum ada data masuk pada tanggal ini';
-        emptyState.style.display = 'block';
+    if (emptyState) {
+        emptyState.style.display = 'none';
     }
 }
 
@@ -270,6 +299,12 @@ function fetchRealtimeData() {
                 const visibleRows = data.recent.filter(item => item.id > clearedUntilId);
                 const tbody = document.getElementById('recentTableBody');
                 const emptyState = document.getElementById('emptyDataState');
+
+                // Sinkronisasi tombol tampilkan kembali jika ada data yang disembunyikan
+                const btnRestore = document.getElementById('btnRestoreData');
+                if (btnRestore) {
+                    btnRestore.style.display = clearedUntilId > 0 ? 'inline-flex' : 'none';
+                }
 
                 if (visibleRows.length > 0) {
                     emptyState.style.display = 'none';

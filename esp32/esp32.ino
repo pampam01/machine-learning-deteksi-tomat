@@ -1,4 +1,8 @@
 #include <ESP32Servo.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "soc/soc.h"
+#include "soc/rtc_cntl_reg.h"
 
 Servo servo1;
 Servo servo2;
@@ -11,6 +15,31 @@ const int pinServo2    = 19;  // GPIO Servo 2 (Pemilah Setengah Matang - Buang K
 const int pinProximity = 32;  // GPIO Sensor Proximity Konveyor (Pin 32)
 const int pinRelay     = 14;  // GPIO Relay (opsional: kontrol motor konveyor)
 
+// Konfigurasi Pin I2C untuk LCD (Pin 21 SDA, Pin 22 SCL)
+const int pinSDA       = 21;  // GPIO 21 = SDA
+const int pinSCL       = 22;  // GPIO 22 = SCL
+
+// Alamat I2C LCD 16x2 (Default 0x27, beberapa tipe modul PCF8574A menggunakan 0x3F)
+#ifndef LCD_I2C_ADDR
+#define LCD_I2C_ADDR 0x27
+#endif
+
+LiquidCrystal_I2C lcd(LCD_I2C_ADDR, 16, 2);
+
+// Status & Counter untuk Tampilan LCD
+bool statusSistemHidup = true;  // true = HIDUP, false = MATI
+int totalTomat         = 0;
+int totalMatang        = 0;
+int totalSetengah      = 0;
+int totalMentah        = 0;
+
+// Flag keberadaan LCD & buffer timer (anti-flicker & anti-freeze)
+bool lcdTerdeteksi     = false;
+bool perluUpdateLcd    = true;
+String pesanKhususLcd  = "";
+unsigned long waktuPesanKhusus = 0;
+unsigned long waktuLcdTerakhir = 0;
+
 // Baud rate komunikasi serial (disamakan dengan Python: 115200)
 const long BAUD_RATE = 115200;
 
@@ -18,11 +47,12 @@ const long BAUD_RATE = 115200;
 // KONFIGURASI SUDUT SERVO (0 - 180 Derajat)
 // ============================================================
 // Posisi Standby / Terbuka lurus (kedua lengan sejajar dinding konveyor menghadap ke depan)
+// Catatan: Gunakan 10 derajat (bukan 0 mentok) agar servo 2 tidak menabrak batas mekanik (penyebab macet/brownout reset)
 const int SERVO1_STANDBY = 90;  // Servo 1 merapat ke dinding kiri (lurus ke depan)
-const int SERVO2_STANDBY = 0;   // Servo 2 merapat ke dinding kanan (lurus ke depan)
+const int SERVO2_STANDBY = 10;  // Servo 2 merapat ke dinding kanan (lurus ke depan, aman tanpa stall)
 
 // Posisi Buang (menutup jalur tengah untuk membelokkan tomat ke wadah)
-const int SERVO1_BUKA    = 0;   // Servo 1 buang kiri (bergerak ke tengah)
+const int SERVO1_BUKA    = 10;  // Servo 1 buang kiri (bergerak ke tengah)
 const int SERVO2_BUKA    = 90;  // Servo 2 buang kanan (bergerak ke tengah)
 
 // ============================================================
@@ -250,11 +280,51 @@ void updateSmoothServo() {
 }
 
 // ============================================================
+// FUNGSI UPDATE DISPLAY LCD 16X2 (ANTI-FLICKER / NON-BLOCKING)
+// ============================================================
+void updateTampilanLcd() {
+  if (!lcdTerdeteksi) return; // Lindungi jika LCD belum terpasang agar tidak menghambat pergerakan servo
+
+  // Throttle pembaruan LCD: maksimal sekali tiap 250ms agar bus I2C tidak membebani servo
+  if (millis() - waktuLcdTerakhir < 250) return;
+  waktuLcdTerakhir = millis();
+
+  char baris1[17];
+  char baris2[17];
+
+  // Baris 1: Status Sistem (HIDUP / MATI atau Notifikasi Sortir Sementara)
+  if (pesanKhususLcd.length() > 0 && (millis() - waktuPesanKhusus < 1500)) {
+    snprintf(baris1, sizeof(baris1), "%-16s", pesanKhususLcd.c_str());
+  } else {
+    pesanKhususLcd = "";
+    if (statusSistemHidup) {
+      snprintf(baris1, sizeof(baris1), "STATUS: HIDUP   ");
+    } else {
+      snprintf(baris1, sizeof(baris1), "STATUS: MATI    ");
+    }
+  }
+
+  // Baris 2: Jumlah Tomat
+  snprintf(baris2, sizeof(baris2), "JML TOMAT: %-5d", totalTomat);
+
+  lcd.setCursor(0, 0);
+  lcd.print(baris1);
+  lcd.setCursor(0, 1);
+  lcd.print(baris2);
+}
+
+// ============================================================
 // EKSEKUSI PERINTAH KLASIFIKASI DENGAN PROTEKSI ANTI-TABRAKAN
 // ============================================================
 void eksekusiAksi(String cmd) {
   // 1. MATANG (Kelas '0') -> Buka Servo 1 (Buang Kiri) dengan Profil S-Curve
   if (cmd == "matang" || cmd == "0") {
+    totalTomat++;
+    totalMatang++;
+    pesanKhususLcd = "SORTIR: MATANG";
+    waktuPesanKhusus = millis();
+    perluUpdateLcd = true;
+
     if (stateSorter == STATE_IDLE) {
       waktuMulaiAksi   = millis();
       waktuMulaiGerak  = waktuMulaiAksi;
@@ -270,6 +340,12 @@ void eksekusiAksi(String cmd) {
   }
   // 2. SETENGAH MATANG (Kelas '2') -> Buka Servo 2 (Buang Kanan) dengan Profil S-Curve
   else if (cmd == "setengah_matang" || cmd == "2") {
+    totalTomat++;
+    totalSetengah++;
+    pesanKhususLcd = "SORTIR: SETENGAH";
+    waktuPesanKhusus = millis();
+    perluUpdateLcd = true;
+
     if (stateSorter == STATE_IDLE) {
       waktuMulaiAksi   = millis();
       waktuMulaiGerak  = waktuMulaiAksi;
@@ -285,6 +361,12 @@ void eksekusiAksi(String cmd) {
   }
   // 3. MENTAH (Kelas '1') -> Kedua Servo Tetap Standby (Lolos Lurus)
   else if (cmd == "mentah" || cmd == "1") {
+    totalTomat++;
+    totalMentah++;
+    pesanKhususLcd = "SORTIR: MENTAH";
+    waktuPesanKhusus = millis();
+    perluUpdateLcd = true;
+
     if (stateSorter == STATE_IDLE) {
       targetAngle1  = SERVO1_STANDBY;
       targetAngle2  = SERVO2_STANDBY;
@@ -304,75 +386,135 @@ void eksekusiAksi(String cmd) {
     servo1.write(SERVO1_STANDBY);
     servo2.write(SERVO2_STANDBY);
     stateSorter   = STATE_IDLE;
+    pesanKhususLcd = "SERVO: STANDBY";
+    waktuPesanKhusus = millis();
+    perluUpdateLcd = true;
     Serial.println("ACK_STANDBY");
+  }
+  // 5. STATUS SISTEM: HIDUP
+  else if (cmd == "hidup" || cmd == "on" || cmd == "start") {
+    statusSistemHidup = true;
+    digitalWrite(pinRelay, HIGH);
+    perluUpdateLcd = true;
+    Serial.println("ACK_STATUS_HIDUP");
+  }
+  // 6. STATUS SISTEM: MATI
+  else if (cmd == "mati" || cmd == "off" || cmd == "stop") {
+    statusSistemHidup = false;
+    digitalWrite(pinRelay, LOW);
+    perluUpdateLcd = true;
+    Serial.println("ACK_STATUS_MATI");
+  }
+  // 7. RESET JUMLAH TOMAT
+  else if (cmd == "reset_tomat" || cmd == "reset_count" || cmd == "clear") {
+    totalTomat    = 0;
+    totalMatang   = 0;
+    totalSetengah = 0;
+    totalMentah   = 0;
+    pesanKhususLcd = "RESET COUNTER OK";
+    waktuPesanKhusus = millis();
+    perluUpdateLcd = true;
+    Serial.println("ACK_RESET_TOMAT_OK");
   }
 }
 
 // ============================================================
-// HANDLER KOMUNIKASI SERIAL
+// HANDLER KOMUNIKASI SERIAL (100% NON-BLOCKING TANPA DELAY)
 // ============================================================
+String serialBuffer = "";
+
 void prosesSerial() {
-  if (Serial.available() > 0) {
-    String data = Serial.readStringUntil('\n');
-    data.trim();
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      serialBuffer.trim();
+      if (serialBuffer.length() > 0) {
+        String data = serialBuffer;
+        serialBuffer = "";
 
-    if (data.length() == 0) return;
+        // 1. Handshake saat Python mendeteksi port
+        if (data == "go") {
+          statusSistemHidup = true;
+          digitalWrite(pinRelay, HIGH);
+          perluUpdateLcd = true;
+          Serial.println("ok");
+        }
+        // 2. Pembacaan sensor proximity konveyor
+        else if (data == "se") {
+          statusProximity = digitalRead(pinProximity);
+          Serial.println(statusProximity);
+        }
+        // 3. Perintah pemilah tomat & kontrol status
+        else if (data == "matang" || data == "0" ||
+                 data == "setengah_matang" || data == "2" ||
+                 data == "mentah" || data == "1" ||
+                 data == "standby" || data == "reset" || data == "3" ||
+                 data == "hidup" || data == "mati" ||
+                 data == "on" || data == "off" ||
+                 data == "start" || data == "stop" ||
+                 data == "reset_tomat" || data == "reset_count" || data == "clear") {
+          eksekusiAksi(data);
+        }
+        // 4. Set jumlah tomat manual / sinkronisasi dari serial
+        else if (data.startsWith("set_tomat ") || data.startsWith("count:")) {
+          int idx = data.indexOf(' ');
+          if (idx < 0) idx = data.indexOf(':');
+          if (idx >= 0) {
+            totalTomat = data.substring(idx + 1).toInt();
+            perluUpdateLcd = true;
+            Serial.print("ACK_SET_TOMAT: "); Serial.println(totalTomat);
+          }
+        }
+        // 5. Query status sistem & counter
+        else if (data == "status") {
+          Serial.print("STATUS:");
+          Serial.print(statusSistemHidup ? "HIDUP" : "MATI");
+          Serial.print(",TOMAT:");
+          Serial.println(totalTomat);
+        }
+        // 6. Perintah manual uji sudut dengan profil S-Curve halus
+        else if (data.startsWith("s1 ")) {
+          int ang = data.substring(3).toInt();
+          gerakSCurveSatuServo(servo1, currentAngle1, currentAngle1, ang, SWEEP_DURATION_MS);
+          targetAngle1 = currentAngle1;
+          startAngle1  = currentAngle1;
+          stateSorter  = STATE_IDLE;
+          Serial.print("ACK_SET_SERVO1: "); Serial.println(currentAngle1);
+        }
+        else if (data.startsWith("s2 ")) {
+          int ang = data.substring(3).toInt();
+          gerakSCurveSatuServo(servo2, currentAngle2, currentAngle2, ang, SWEEP_DURATION_MS);
+          targetAngle2 = currentAngle2;
+          startAngle2  = currentAngle2;
+          stateSorter  = STATE_IDLE;
+          Serial.print("ACK_SET_SERVO2: "); Serial.println(currentAngle2);
+        }
+        // 7. Tes gerakan berurutan kedua servo dengan profil S-Curve
+        else if (data == "test") {
+          Serial.println("ACK_TEST_START");
+          gerakSCurveSatuServo(servo1, currentAngle1, SERVO1_STANDBY, SERVO1_BUKA, SWEEP_DURATION_MS);
+          delay(WAKTU_TAHAN_MS);
+          gerakSCurveSatuServo(servo1, currentAngle1, SERVO1_BUKA, SERVO1_STANDBY, SWEEP_DURATION_MS);
+          delay(300);
 
-    // 1. Handshake saat Python mendeteksi port
-    if (data == "go") {
-      Serial.println("ok");
-    }
-    // 2. Pembacaan sensor proximity konveyor
-    else if (data == "se") {
-      statusProximity = digitalRead(pinProximity);
-      Serial.println(statusProximity);
-    }
-    // 3. Perintah pemilah tomat
-    else if (data == "matang" || data == "0" ||
-             data == "setengah_matang" || data == "2" ||
-             data == "mentah" || data == "1" ||
-             data == "standby" || data == "reset" || data == "3") {
-      eksekusiAksi(data);
-    }
-    // 4. Perintah manual uji sudut dengan profil S-Curve halus
-    else if (data.startsWith("s1 ")) {
-      int ang = data.substring(3).toInt();
-      gerakSCurveSatuServo(servo1, currentAngle1, currentAngle1, ang, SWEEP_DURATION_MS);
-      targetAngle1 = currentAngle1;
-      startAngle1  = currentAngle1;
-      stateSorter  = STATE_IDLE;
-      Serial.print("ACK_SET_SERVO1: "); Serial.println(currentAngle1);
-    }
-    else if (data.startsWith("s2 ")) {
-      int ang = data.substring(3).toInt();
-      gerakSCurveSatuServo(servo2, currentAngle2, currentAngle2, ang, SWEEP_DURATION_MS);
-      targetAngle2 = currentAngle2;
-      startAngle2  = currentAngle2;
-      stateSorter  = STATE_IDLE;
-      Serial.print("ACK_SET_SERVO2: "); Serial.println(currentAngle2);
-    }
-    // 5. Tes gerakan berurutan kedua servo dengan profil S-Curve
-    else if (data == "test") {
-      Serial.println("ACK_TEST_START");
-      // Servo 1 Matang (Buang Kiri)
-      gerakSCurveSatuServo(servo1, currentAngle1, SERVO1_STANDBY, SERVO1_BUKA, SWEEP_DURATION_MS);
-      delay(WAKTU_TAHAN_MS);
-      gerakSCurveSatuServo(servo1, currentAngle1, SERVO1_BUKA, SERVO1_STANDBY, SWEEP_DURATION_MS);
-      delay(300);
+          gerakSCurveSatuServo(servo2, currentAngle2, SERVO2_STANDBY, SERVO2_BUKA, SWEEP_DURATION_MS);
+          delay(WAKTU_TAHAN_MS);
+          gerakSCurveSatuServo(servo2, currentAngle2, SERVO2_BUKA, SERVO2_STANDBY, SWEEP_DURATION_MS);
 
-      // Servo 2 Setengah Matang (Buang Kanan)
-      gerakSCurveSatuServo(servo2, currentAngle2, SERVO2_STANDBY, SERVO2_BUKA, SWEEP_DURATION_MS);
-      delay(WAKTU_TAHAN_MS);
-      gerakSCurveSatuServo(servo2, currentAngle2, SERVO2_BUKA, SERVO2_STANDBY, SWEEP_DURATION_MS);
-
-      currentAngle1 = SERVO1_STANDBY; targetAngle1 = SERVO1_STANDBY; startAngle1 = SERVO1_STANDBY;
-      currentAngle2 = SERVO2_STANDBY; targetAngle2 = SERVO2_STANDBY; startAngle2 = SERVO2_STANDBY;
-      stateSorter = STATE_IDLE;
-      Serial.println("ACK_TEST_DONE");
-    }
-    else {
-      Serial.print("ERR_UNKNOWN_CMD: ");
-      Serial.println(data);
+          currentAngle1 = SERVO1_STANDBY; targetAngle1 = SERVO1_STANDBY; startAngle1 = SERVO1_STANDBY;
+          currentAngle2 = SERVO2_STANDBY; targetAngle2 = SERVO2_STANDBY; startAngle2 = SERVO2_STANDBY;
+          stateSorter = STATE_IDLE;
+          Serial.println("ACK_TEST_DONE");
+        }
+        else {
+          Serial.print("ERR_UNKNOWN_CMD: ");
+          Serial.println(data);
+        }
+      }
+    } else {
+      if (serialBuffer.length() < 64) {
+        serialBuffer += c;
+      }
     }
   }
 }
@@ -381,6 +523,9 @@ void prosesSerial() {
 // SETUP
 // ============================================================
 void setup() {
+  // Nonaktifkan brownout detector agar ESP32 tidak restart saat beban arus puncak servo/LCD
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
   Serial.begin(BAUD_RATE);
 
   pinMode(pinProximity, INPUT_PULLUP);
@@ -393,9 +538,9 @@ void setup() {
   servo1.setPeriodHertz(50); // Frekuensi standar servo 50Hz
   servo2.setPeriodHertz(50);
 
-  // Inisialisasi pin servo
-  servo1.attach(pinServo1, 500, 2400);
-  servo2.attach(pinServo2, 500, 2400);
+  // Inisialisasi pin servo dengan rentang pulsa standar Arduino (544 - 2400us)
+  servo1.attach(pinServo1, 544, 2400);
+  servo2.attach(pinServo2, 544, 2400);
 
   // Set posisi awal standby
   currentAngle1 = SERVO1_STANDBY;
@@ -407,24 +552,74 @@ void setup() {
   servo1.write(currentAngle1);
   servo2.write(currentAngle2);
 
-  // Uji gerak halus singkat saat boot (tanpa getaran gedek-gedek)
-  delay(200);
-  gerakSCurveSatuServo(servo1, currentAngle1, SERVO1_STANDBY, 75, 150);
-  gerakSCurveSatuServo(servo1, currentAngle1, 75, SERVO1_STANDBY, 150);
-  gerakSCurveSatuServo(servo2, currentAngle2, SERVO2_STANDBY, 15, 150);
-  gerakSCurveSatuServo(servo2, currentAngle2, 15, SERVO2_STANDBY, 150);
+  // Inisialisasi I2C LCD dengan Fast Mode 400kHz & Timeout aman
+  Wire.begin(pinSDA, pinSCL);
+  Wire.setClock(400000); // 400kHz Fast I2C (mencegah delay pada pergerakan servo)
+  Wire.setTimeOut(30);   // Timeout 30ms
+
+  // Cek apakah modul LCD terpasang fisik di bus I2C (coba 0x27, lalu 0x3F)
+  byte alamatLcd = LCD_I2C_ADDR;
+  Wire.beginTransmission(alamatLcd);
+  if (Wire.endTransmission() == 0) {
+    lcdTerdeteksi = true;
+  } else {
+    Wire.beginTransmission(0x3F);
+    if (Wire.endTransmission() == 0) {
+      alamatLcd = 0x3F;
+      lcd = LiquidCrystal_I2C(alamatLcd, 16, 2);
+      lcdTerdeteksi = true;
+    }
+  }
+
+  if (lcdTerdeteksi) {
+    lcd.init();
+    lcd.backlight();
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("SISTEM PEMILAH  ");
+    lcd.setCursor(0, 1);
+    lcd.print("TOMAT C4.5 READY");
+    delay(200);
+    updateTampilanLcd();
+  }
+
+  // Uji gerak halus singkat saat boot
+  delay(100);
+  gerakSCurveSatuServo(servo1, currentAngle1, SERVO1_STANDBY, 75, 100);
+  gerakSCurveSatuServo(servo1, currentAngle1, 75, SERVO1_STANDBY, 100);
+  gerakSCurveSatuServo(servo2, currentAngle2, SERVO2_STANDBY, 25, 100);
+  gerakSCurveSatuServo(servo2, currentAngle2, 25, SERVO2_STANDBY, 100);
+
+  Serial.println("ESP32_READY");
 }
 
 // ============================================================
 // LOOP UTAMA
 // ============================================================
 void loop() {
-  // 1. Perbarui gerakan servo & timer auto-close
+  // 1. Perbarui gerakan servo & timer auto-close (prioritas utama)
   updateSmoothServo();
 
   // 2. Pantau transisi sensor infrared proximity (Pin 32)
   updateProximitySensor();
 
-  // 3. Baca perintah serial secara non-blocking
+  // 3. Baca perintah serial secara 100% non-blocking (instan tanpa timeout delay)
   prosesSerial();
+
+  // 4. Perbarui LCD HANYA saat servo TIDAK sedang bergerak aktif
+  //    agar ayunan servo 100% mulus tanpa terinterupsi transaksi I2C
+  bool servoSedangBergerak = (stateSorter == STATE_SERVO1_OPENING || 
+                              stateSorter == STATE_SERVO1_CLOSING || 
+                              stateSorter == STATE_SERVO2_OPENING || 
+                              stateSorter == STATE_SERVO2_CLOSING);
+
+  if (!servoSedangBergerak) {
+    if (perluUpdateLcd || (pesanKhususLcd.length() > 0 && millis() - waktuPesanKhusus >= 1500)) {
+      updateTampilanLcd();
+      perluUpdateLcd = false;
+    }
+  }
+
+  // Beri kesempatan FreeRTOS scheduler agar watchdog tidak terpicu
+  yield();
 }

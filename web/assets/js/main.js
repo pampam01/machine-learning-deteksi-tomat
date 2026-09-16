@@ -1,6 +1,9 @@
-// =============================================
-// Tomata IoT - JavaScript Utama
-// =============================================
+// Helper Escape HTML Global
+window.escapeHtml = function (str) {
+    return (str || '').replace(/[&<>"']/g, function (m) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+    });
+};
 
 document.addEventListener('DOMContentLoaded', function () {
 
@@ -118,11 +121,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     };
 
-    function escapeHtml(str) {
-        return (str || '').replace(/[&<>"']/g, function (m) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
-        });
-    }
+
 
     // === Global Table Sorting Function ===
     window.sortTable = function (tableIdOrElem, colIndex, type) {
