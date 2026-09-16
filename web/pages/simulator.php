@@ -17,28 +17,28 @@ include __DIR__ . '/../includes/header.php';
     <div class="stat-card matang" style="cursor: pointer;" onclick="quickSend('Matang')">
         <div class="stat-header">
             <span class="stat-label">Klik Cepat Tes</span>
-            <span class="stat-icon">🟢</span>
+            <span class="stat-icon">🔴</span>
         </div>
         <div class="stat-value" style="font-size: 1.25rem;">+1 Matang</div>
-        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">Kirim 1 buah tomat Matang</p>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">Kirim 1 buah tomat Matang (Merah)</p>
     </div>
 
     <div class="stat-card setengah" style="cursor: pointer;" onclick="quickSend('Setengah Matang')">
         <div class="stat-header">
             <span class="stat-label">Klik Cepat Tes</span>
-            <span class="stat-icon">🟠</span>
+            <span class="stat-icon">🟡</span>
         </div>
         <div class="stat-value" style="font-size: 1.25rem;">+1 Setengah</div>
-        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">Kirim 1 tomat Setengah Matang</p>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">Kirim 1 tomat Setengah Matang (Kuning)</p>
     </div>
 
     <div class="stat-card belum" style="cursor: pointer;" onclick="quickSend('Belum Matang')">
         <div class="stat-header">
             <span class="stat-label">Klik Cepat Tes</span>
-            <span class="stat-icon">🔴</span>
+            <span class="stat-icon">🟢</span>
         </div>
         <div class="stat-value" style="font-size: 1.25rem;">+1 Belum Matang</div>
-        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">Kirim 1 buah tomat Mentah</p>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 8px;">Kirim 1 buah tomat Mentah (Hijau)</p>
     </div>
 
     <div class="stat-card total" style="cursor: pointer;" onclick="toggleAutoSim()">
@@ -72,7 +72,7 @@ include __DIR__ . '/../includes/header.php';
 
             <div class="form-group">
                 <label for="inputFitur">Nilai Fitur HSV / Catatan (Opsional)</label>
-                <input type="text" id="inputFitur" name="fitur" placeholder="Contoh: H:15, S:210, V:185" value="Simulasi manual web" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: var(--border-radius-sm); font-size: 0.95rem;">
+                <input type="text" id="inputFitur" name="fitur" placeholder="Contoh: HSV: (12, 185, 205) | RGB: (215, 45, 30)" value="HSV: (12, 185, 205) | RGB: (215, 45, 30)" style="width: 100%; padding: 10px 12px; border: 1px solid var(--gray-300); border-radius: var(--border-radius-sm); font-size: 0.95rem;">
             </div>
 
             <div class="form-group">
@@ -82,7 +82,7 @@ include __DIR__ . '/../includes/header.php';
 
             <div style="display: flex; gap: 12px; margin-top: 20px;">
                 <button type="submit" id="btnSubmitCustom" class="btn btn-primary" style="flex: 1;">🚀 Kirim Data ke API</button>
-                <a href="<?= BASE_URL ?>/pages/dashboard.php" class="btn btn-outline" style="text-align: center; display: inline-flex; align-items: center; justify-content: center;">📊 Lihat Dashboard</a>
+                <a href="<?= BASE_URL ?>/pages/dashboard" class="btn btn-outline" style="text-align: center; display: inline-flex; align-items: center; justify-content: center;">📊 Lihat Dashboard</a>
             </div>
         </form>
     </div>

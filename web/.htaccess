@@ -39,11 +39,29 @@ Options -Indexes
     </IfModule>
 </FilesMatch>
 
-# Lindungi folder sql dan config dari akses publik langsung
+# 4. URL Rewrite (Pretty URLs / Menghilangkan ekstensi .php di Apache cPanel)
 <IfModule mod_rewrite.c>
     RewriteEngine On
+
+    # Lindungi folder sql dan config dari akses publik langsung
     RewriteRule ^sql/ - [F,L]
+    RewriteRule ^config/ - [F,L]
+
+    # Handle /logout -> logout.php
+    RewriteRule ^logout/?$ logout.php [L,QSA]
+
+    # Jika file asli sudah ada (file statis, css, js, gambar), lewati rewrite
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Rewrite URL tanpa ekstensi ke file .php yang cocok
+    RewriteCond %{REQUEST_FILENAME}.php -f
+    RewriteRule ^(.*)$ $1.php [L,QSA]
 </IfModule>
+
+# Dukung Apache MultiViews untuk auto-match file .php tanpa ekstensi
+Options +MultiViews
 
 # 4. Header Keamanan & Karakter Standar
 <IfModule mod_headers.c>

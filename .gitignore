@@ -5,4 +5,17 @@ tiara-tomata.rar
 graphify-out/
 Tomato.v3i.yolov8/
 crops/
+crops/*
 .venv/
+
+# Uploads Web & Foto Tomat
+web/uploads/foto/*
+!web/uploads/foto/.gitkeep
+web/uploads/*
+!web/uploads/.htaccess
+!web/uploads/foto/
+test_images/*
+*.jpg
+*.jpeg
+*.png
+*.bmp

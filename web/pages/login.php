@@ -24,7 +24,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['admin_id'] = $admin['id'];
                 $_SESSION['admin_username'] = $admin['username'];
                 $_SESSION['admin_nama'] = $admin['nama'];
-                header('Location: ' . BASE_URL . '/pages/dashboard.php');
+                header('Location: ' . BASE_URL . '/pages/dashboard');
                 exit();
             } else {
                 $error = 'Password salah.';

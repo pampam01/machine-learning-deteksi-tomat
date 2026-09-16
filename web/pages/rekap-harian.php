@@ -3,9 +3,10 @@ require_once __DIR__ . '/../includes/auth.php';
 require_once __DIR__ . '/../config/database.php';
 requireLogin();
 
-// Filter tanggal & sesi
+// Filter tanggal, sesi & sort
 $filter_date = $_GET['tanggal'] ?? '';
 $filter_session = $_GET['sesi'] ?? '';
+$sort_by = $_GET['sort'] ?? 'tanggal_desc';
 
 // Pagination
 $per_page = 15;
@@ -24,6 +25,16 @@ if (!empty($filter_session)) {
 $where_sql = '';
 if (count($where_clauses) > 0) {
     $where_sql = " WHERE " . implode(" AND ", $where_clauses);
+}
+
+// Order SQL
+$order_sql = "ORDER BY tanggal DESC, session_id DESC";
+if ($sort_by === 'tanggal_asc') {
+    $order_sql = "ORDER BY tanggal ASC, session_id ASC";
+} elseif ($sort_by === 'total_desc') {
+    $order_sql = "ORDER BY total_semua DESC, tanggal DESC";
+} elseif ($sort_by === 'matang_desc') {
+    $order_sql = "ORDER BY total_matang DESC, tanggal DESC";
 }
 
 // Query total data grup (tanggal + session_id)
@@ -51,7 +62,7 @@ $query = "SELECT
     FROM riwayat_klasifikasi
     $where_sql
     GROUP BY tanggal, session_id
-    ORDER BY tanggal DESC, session_id DESC
+    $order_sql
     LIMIT $per_page OFFSET $offset";
 
 $result = $conn->query($query);
@@ -73,7 +84,7 @@ include __DIR__ . '/../includes/header.php';
         <form class="filter-form" method="GET" action="">
             <input type="date" name="tanggal" value="<?= htmlspecialchars($filter_date) ?>" id="filterTanggal" title="Filter Tanggal">
             
-            <select name="sesi" style="padding: 8px 12px; border: 1px solid var(--gray-300); border-radius: var(--border-radius-sm); font-family: inherit; font-size: 0.85rem; color: var(--gray-700);">
+            <select name="sesi" title="Filter Sesi">
                 <option value="">Semua Sesi</option>
                 <?php if ($sessions_list && $sessions_list->num_rows > 0): ?>
                     <?php while ($s = $sessions_list->fetch_assoc()): ?>
@@ -84,26 +95,33 @@ include __DIR__ . '/../includes/header.php';
                 <?php endif; ?>
             </select>
 
+            <select name="sort" title="Urutkan Berdasarkan" onchange="this.form.submit()">
+                <option value="tanggal_desc" <?= $sort_by === 'tanggal_desc' ? 'selected' : '' ?>>⏱️ Tanggal Terbaru</option>
+                <option value="tanggal_asc" <?= $sort_by === 'tanggal_asc' ? 'selected' : '' ?>>⏳ Tanggal Terlama</option>
+                <option value="total_desc" <?= $sort_by === 'total_desc' ? 'selected' : '' ?>>🍅 Total Terbanyak</option>
+                <option value="matang_desc" <?= $sort_by === 'matang_desc' ? 'selected' : '' ?>>🔴 Matang Terbanyak</option>
+            </select>
+
             <button type="submit" class="btn btn-primary btn-sm">Filter</button>
-            <?php if (!empty($filter_date) || !empty($filter_session)): ?>
-                <a href="<?= BASE_URL ?>/pages/rekap-harian.php" class="btn btn-outline btn-sm">Reset</a>
+            <?php if (!empty($filter_date) || !empty($filter_session) || $sort_by !== 'tanggal_desc'): ?>
+                <a href="<?= BASE_URL ?>/pages/rekap-harian" class="btn btn-outline btn-sm">Reset</a>
             <?php endif; ?>
         </form>
     </div>
 
     <div class="table-responsive">
         <?php if ($result && $result->num_rows > 0): ?>
-        <table>
+        <table id="rekapTable">
             <thead>
                 <tr>
-                    <th>No</th>
-                    <th>Tanggal</th>
-                    <th>Sesi Hitungan</th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 0, 'num')">No <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 1, 'str')">Tanggal <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 2, 'num')">Sesi Hitungan <span class="sort-indicator"></span></th>
                     <th>Waktu (Mulai - Selesai)</th>
-                    <th>Total Matang</th>
-                    <th>Total Setengah Matang</th>
-                    <th>Total Belum Matang</th>
-                    <th>Total Sesi</th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 4, 'num')">Total Matang <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 5, 'num')">Total Setengah <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 6, 'num')">Total Belum <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('rekapTable', 7, 'num')">Total Sesi <span class="sort-indicator"></span></th>
                 </tr>
             </thead>
             <tbody>
@@ -120,13 +138,13 @@ include __DIR__ . '/../includes/header.php';
                         <?= date('H:i', strtotime($row['waktu_mulai'])) ?> - <?= date('H:i', strtotime($row['waktu_selesai'])) ?>
                     </td>
                     <td>
-                        <span class="badge badge-matang">🟢 <?= number_format($row['total_matang']) ?></span>
+                        <span class="badge badge-matang">🔴 <?= number_format($row['total_matang']) ?></span>
                     </td>
                     <td>
-                        <span class="badge badge-setengah">🟠 <?= number_format($row['total_setengah']) ?></span>
+                        <span class="badge badge-setengah">🟡 <?= number_format($row['total_setengah']) ?></span>
                     </td>
                     <td>
-                        <span class="badge badge-belum">🔴 <?= number_format($row['total_belum']) ?></span>
+                        <span class="badge badge-belum">🟢 <?= number_format($row['total_belum']) ?></span>
                     </td>
                     <td><strong><?= number_format($row['total_semua']) ?></strong></td>
                 </tr>

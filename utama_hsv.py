@@ -41,8 +41,8 @@ UKURAN_FRAME = (640, 480)
 # ============================================================
 # KONFIGURASI WEB API / CPANEL & SENSOR IR
 # ============================================================
-# Ganti URL ini saat web sudah dihosting ke cPanel (contoh: "https://domainkamu.com/api/klasifikasi.php")
-WEB_API_URL = "http://127.0.0.1:8000/api/klasifikasi.php"
+# Endpoint Web API cPanel aktif untuk pengiriman data klasifikasi realtime
+WEB_API_URL = "https://localhost.scode.web.id/2026-tiara-tomat/api/klasifikasi.php"
 WEB_API_ENABLED = True
 KIRIM_FOTO_TOMAT = True
 # Throttle jeda antar pengiriman ke web agar aman dari rate limiting / ModSecurity cPanel (10s window)
@@ -370,8 +370,8 @@ class WebAPIWorker(threading.Thread):
                         print(f"[WEB API] Upload data berhasil ({status_code}) pada percobaan ke-{attempt}: {item.get('label')}")
                         return True
             except urllib.error.HTTPError as http_err:
-                # Otomatis beralih jika server PHP dijalankan di root (/web/api/klasifikasi.php) vs di folder web (/api/klasifikasi.php)
-                if http_err.code == 404 and ("127.0.0.1" in self.url or "localhost" in self.url):
+                # Otomatis beralih jika server PHP lokal dijalankan di root (/web/api/klasifikasi.php) vs di folder web (/api/klasifikasi.php)
+                if http_err.code == 404 and ("127.0.0.1" in self.url or "localhost:8000" in self.url or "localhost/" in self.url):
                     if "/web/api/" in self.url:
                         alt_url = self.url.replace("/web/api/", "/api/")
                     else:
@@ -1031,23 +1031,18 @@ if __name__ == "__main__":
                 else:
                     print(f"[SERIAL] ESP32 tidak terhubung, perintah '{info_kelas['command']}' dilewati.")
 
-                # Ekstraksi spektrum HSV fisik nyata dari tomat untuk dikirim ke web dashboard
+                # Ekstraksi spektrum HSV & RGB fisik nyata dari tomat untuk dikirim ke web dashboard
                 try:
                     hsv_crop = cv2.cvtColor(crop_tomat, cv2.COLOR_BGR2HSV)
                     mean_h = float(np.mean(hsv_crop[:, :, 0]))
                     mean_s = float(np.mean(hsv_crop[:, :, 1]))
                     mean_v = float(np.mean(hsv_crop[:, :, 2]))
-                    mask_valid = (hsv_crop[:, :, 1] > 40) & (hsv_crop[:, :, 2] > 40)
-                    if np.count_nonzero(mask_valid) > 0:
-                        valid_hues = hsv_crop[:, :, 0][mask_valid]
-                        tot = len(valid_hues)
-                        r_pct = (np.count_nonzero((valid_hues < 14) | (valid_hues >= 165)) / tot) * 100.0
-                        k_pct = (np.count_nonzero((valid_hues >= 14) & (valid_hues < 34)) / tot) * 100.0
-                        h_pct = (np.count_nonzero((valid_hues >= 34) & (valid_hues <= 85)) / tot) * 100.0
-                    else:
-                        r_pct, k_pct, h_pct = 0.0, 0.0, 0.0
 
-                    ringkasan_fitur = f"H:{mean_h:.1f}, S:{mean_s:.1f}, V:{mean_v:.1f} (R:{r_pct:.1f}%, K:{k_pct:.1f}%, H:{h_pct:.1f}%)"
+                    mean_b = float(np.mean(crop_tomat[:, :, 0]))
+                    mean_g = float(np.mean(crop_tomat[:, :, 1]))
+                    mean_r = float(np.mean(crop_tomat[:, :, 2]))
+
+                    ringkasan_fitur = f"HSV:({mean_h:.0f},{mean_s:.0f},{mean_v:.0f}) | RGB:({mean_r:.0f},{mean_g:.0f},{mean_b:.0f})"
                 except Exception:
                     ringkasan_fitur = f"Kelas {hasil} ({info_kelas['label_ui']})"
 

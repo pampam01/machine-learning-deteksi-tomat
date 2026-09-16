@@ -41,7 +41,7 @@ function isLoggedIn() {
  */
 function requireLogin() {
     if (!isLoggedIn()) {
-        header('Location: ' . BASE_URL . '/pages/login.php');
+        header('Location: ' . BASE_URL . '/pages/login');
         exit();
     }
 }
@@ -51,7 +51,7 @@ function requireLogin() {
  */
 function redirectIfLoggedIn() {
     if (isLoggedIn()) {
-        header('Location: ' . BASE_URL . '/pages/dashboard.php');
+        header('Location: ' . BASE_URL . '/pages/dashboard');
         exit();
     }
 }

@@ -123,13 +123,13 @@ include __DIR__ . '/../includes/header.php';
 
     <div class="table-responsive">
         <?php if ($admins && $admins->num_rows > 0): ?>
-        <table>
+        <table id="adminTable">
             <thead>
                 <tr>
-                    <th>No</th>
-                    <th>Username</th>
-                    <th>Nama</th>
-                    <th>Dibuat</th>
+                    <th class="sortable" onclick="sortTable('adminTable', 0, 'num')">No <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('adminTable', 1, 'str')">Username <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('adminTable', 2, 'str')">Nama <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('adminTable', 3, 'str')">Dibuat <span class="sort-indicator"></span></th>
                     <th>Aksi</th>
                 </tr>
             </thead>

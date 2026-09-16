@@ -56,32 +56,32 @@ $css_ver = file_exists($css_path) ? filemtime($css_path) : time();
         </div>
 
         <ul class="sidebar-menu">
-            <li class="<?= $current_page === 'dashboard' ? 'active' : '' ?>">
-                <a href="<?= BASE_URL ?>/pages/dashboard.php">
+            <li class="<?= in_array($current_page, ['dashboard', 'dashboard.php']) ? 'active' : '' ?>">
+                <a href="<?= BASE_URL ?>/pages/dashboard">
                     <span class="menu-icon">📊</span>
                     <span class="menu-text">Dashboard</span>
                 </a>
             </li>
-            <li class="<?= $current_page === 'riwayat' ? 'active' : '' ?>">
-                <a href="<?= BASE_URL ?>/pages/riwayat.php">
+            <li class="<?= in_array($current_page, ['riwayat', 'riwayat.php']) ? 'active' : '' ?>">
+                <a href="<?= BASE_URL ?>/pages/riwayat">
                     <span class="menu-icon">📋</span>
                     <span class="menu-text">Riwayat</span>
                 </a>
             </li>
-            <li class="<?= $current_page === 'rekap-harian' ? 'active' : '' ?>">
-                <a href="<?= BASE_URL ?>/pages/rekap-harian.php">
+            <li class="<?= in_array($current_page, ['rekap-harian', 'rekap-harian.php']) ? 'active' : '' ?>">
+                <a href="<?= BASE_URL ?>/pages/rekap-harian">
                     <span class="menu-icon">📅</span>
                     <span class="menu-text">Rekap Harian</span>
                 </a>
             </li>
-            <li class="<?= $current_page === 'data-admin' ? 'active' : '' ?>">
-                <a href="<?= BASE_URL ?>/pages/data-admin.php">
+            <li class="<?= in_array($current_page, ['data-admin', 'data-admin.php']) ? 'active' : '' ?>">
+                <a href="<?= BASE_URL ?>/pages/data-admin">
                     <span class="menu-icon">👤</span>
                     <span class="menu-text">Data Admin</span>
                 </a>
             </li>
-            <li class="<?= $current_page === 'simulator' ? 'active' : '' ?>">
-                <a href="<?= BASE_URL ?>/pages/simulator.php">
+            <li class="<?= in_array($current_page, ['simulator', 'simulator.php']) ? 'active' : '' ?>">
+                <a href="<?= BASE_URL ?>/pages/simulator">
                     <span class="menu-icon">🧪</span>
                     <span class="menu-text">Tes Input / Simulator</span>
                 </a>
@@ -93,7 +93,7 @@ $css_ver = file_exists($css_path) ? filemtime($css_path) : time();
                 <span class="admin-icon">👤</span>
                 <span class="admin-name"><?= htmlspecialchars($_SESSION['admin_nama'] ?? 'Admin') ?></span>
             </div>
-            <a href="<?= BASE_URL ?>/logout.php" class="btn-logout">
+            <a href="<?= BASE_URL ?>/logout" class="btn-logout">
                 <span class="logout-icon">🚪</span>
                 <span class="menu-text">Logout</span>
             </a>

@@ -50,13 +50,11 @@ include __DIR__ . '/../includes/header.php';
         <div class="page-title-row">
             <h2>Dashboard</h2>
             <span class="live-badge">
-                <span class="pulse-dot"></span>
-            
+                <span class="pulse-dot"></span> LIVE
             </span>
         </div>
-      
+        <p>Monitoring klasifikasi kematangan tomat secara realtime & sesi hitungan aktif</p>
     </div>
-  
 </div>
 
 <div id="toastNotification" class="toast-notification"></div>
@@ -80,19 +78,19 @@ include __DIR__ . '/../includes/header.php';
 <!-- Stats Cards -->
 <div class="stats-grid">
     <div class="stat-card matang">
-        <div class="stat-icon">🟢</div>
+        <div class="stat-icon">🔴</div>
         <div class="stat-label">Total Matang</div>
         <div class="stat-value" id="statMatang"><?= number_format($rekap['total_matang']) ?></div>
     </div>
 
     <div class="stat-card setengah">
-        <div class="stat-icon">🟠</div>
+        <div class="stat-icon">🟡</div>
         <div class="stat-label">Total Setengah Matang</div>
         <div class="stat-value" id="statSetengah"><?= number_format($rekap['total_setengah']) ?></div>
     </div>
 
     <div class="stat-card belum">
-        <div class="stat-icon">🔴</div>
+        <div class="stat-icon">🟢</div>
         <div class="stat-label">Total Belum Matang</div>
         <div class="stat-value" id="statBelum"><?= number_format($rekap['total_belum']) ?></div>
     </div>
@@ -109,6 +107,7 @@ include __DIR__ . '/../includes/header.php';
     <div class="table-header">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
             <h3>📥 Data Masuk Realtime</h3>
+            <span class="badge" style="background:#E3F2FD; color:#1565C0; border:1px solid #BBDEFB; font-size:0.75rem; font-weight:600;">⏱️ Auto-update: 10 Detik</span>
             <span class="status-time" id="lastUpdateTime">Memuat data...</span>
         </div>
 
@@ -122,17 +121,17 @@ include __DIR__ . '/../includes/header.php';
         </div>
     </div>
     <div class="table-responsive">
-        <table>
+        <table id="recentTable">
             <thead>
                 <tr>
-                    <th>No</th>
-                    <th>Tanggal</th>
-                    <th>Waktu</th>
-                    <th>Jenis Klasifikasi</th>
-                    <th>Nilai Fitur</th>
-                    <th>Total Matang</th>
-                    <th>Total Setengah Matang</th>
-                    <th>Total Belum Matang</th>
+                    <th class="sortable" onclick="sortTable('recentTable', 0, 'num')">No <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('recentTable', 1, 'str')">Tanggal <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('recentTable', 2, 'str')">Waktu <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('recentTable', 3, 'str')">Jenis Klasifikasi <span class="sort-indicator"></span></th>
+                    <th>Nilai Fitur (HSV & RGB)</th>
+                    <th class="sortable" onclick="sortTable('recentTable', 5, 'num')">Total Matang <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('recentTable', 6, 'num')">Total Setengah <span class="sort-indicator"></span></th>
+                    <th class="sortable" onclick="sortTable('recentTable', 7, 'num')">Total Belum <span class="sort-indicator"></span></th>
                     <th>Foto</th>
                 </tr>
             </thead>
@@ -169,9 +168,15 @@ function showToast(message, type = 'success') {
 // Format badge jenis klasifikasi
 function getBadgeHtml(jenis) {
     let badgeClass = 'badge-matang';
-    if (jenis === 'Setengah Matang') badgeClass = 'badge-setengah';
-    else if (jenis === 'Belum Matang') badgeClass = 'badge-belum';
-    return `<span class="badge ${badgeClass}">${jenis}</span>`;
+    let icon = '🔴';
+    if (jenis === 'Setengah Matang') {
+        badgeClass = 'badge-setengah';
+        icon = '🟡';
+    } else if (jenis === 'Belum Matang') {
+        badgeClass = 'badge-belum';
+        icon = '🟢';
+    }
+    return `<span class="badge ${badgeClass}">${icon} ${jenis}</span>`;
 }
 
 // Bersihkan data masuk dari tampilan dashboard
@@ -271,21 +276,30 @@ function fetchRealtimeData() {
                     let html = '';
                     visibleRows.forEach((row, idx) => {
                         const fotoHtml = row.foto
-                            ? `<a href="${BASE_URL}/${row.foto}" target="_blank"><img src="${BASE_URL}/${row.foto}" alt="foto" style="height:40px;border-radius:4px;cursor:pointer;"></a>`
+                            ? `<a href="${BASE_URL}/${row.foto}" target="_blank"><img src="${BASE_URL}/${row.foto}" alt="foto" style="height:36px; border-radius:4px; cursor:pointer; object-fit:cover;"></a>`
                             : '<span style="color:#aaa;">—</span>';
-                        const fiturHtml = row.fitur
-                            ? `<code style="font-size:0.82em;">${row.fitur}</code>`
-                            : '<span style="color:#aaa;">—</span>';
+
+                        let fiturHtml = '<span style="color:#aaa;">—</span>';
+                        if (row.fitur) {
+                            const rawFitur = row.fitur;
+                            let shortFitur = rawFitur;
+                            if (shortFitur.length > 28) {
+                                shortFitur = shortFitur.substring(0, 26) + '...';
+                            }
+                            const safeRaw = encodeURIComponent(rawFitur);
+                            fiturHtml = `<span class="fitur-badge" onclick="showFiturModal('${safeRaw}')" title="Klik untuk rincian HSV & RGB: ${escapeHtml(rawFitur)}">📊 ${escapeHtml(shortFitur)}</span>`;
+                        }
+
                         html += `
                             <tr data-id="${row.id}" class="${idx === 0 && !isFirstLoad ? 'row-highlight' : ''}">
                                 <td>${idx + 1}</td>
                                 <td>${row.tanggal}</td>
                                 <td><strong>${row.waktu}</strong></td>
                                 <td>${getBadgeHtml(row.jenis)}</td>
-                                <td>${fiturHtml}</td>
-                                <td><span class="badge badge-matang">🟢 ${row.total_matang}</span></td>
-                                <td><span class="badge badge-setengah">🟠 ${row.total_setengah}</span></td>
-                                <td><span class="badge badge-belum">🔴 ${row.total_belum}</span></td>
+                                <td class="fitur-cell">${fiturHtml}</td>
+                                <td><span class="badge badge-matang">🔴 ${row.total_matang}</span></td>
+                                <td><span class="badge badge-setengah">🟡 ${row.total_setengah}</span></td>
+                                <td><span class="badge badge-belum">🟢 ${row.total_belum}</span></td>
                                 <td>${fotoHtml}</td>
                             </tr>
                         `;
@@ -303,10 +317,10 @@ function fetchRealtimeData() {
         });
 }
 
-// Inisialisasi polling berkala
+// Inisialisasi polling berkala tiap 10 detik
 document.addEventListener('DOMContentLoaded', () => {
     fetchRealtimeData();
-    setInterval(fetchRealtimeData, 20000); // update realtime tiap 20 detik (20000 ms)
+    setInterval(fetchRealtimeData, 10000); // 10 detik (10000 ms)
 });
 </script>
 
