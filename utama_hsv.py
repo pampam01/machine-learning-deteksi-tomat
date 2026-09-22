@@ -7,6 +7,7 @@ import sys
 import threading
 import queue
 import urllib.request
+import json
 import uuid
 from collections import deque, Counter
 
@@ -275,6 +276,7 @@ def init_serial():
                 print(f"[SERIAL] Berhasil terhubung ke {port.device} ({port.description})")
                 worker = ESP32Worker(temp_ser, port.device)
                 worker.start()
+                sinkronkan_tomat_ke_esp32(worker)
                 return worker
             else:
                 temp_ser.close()
@@ -284,6 +286,45 @@ def init_serial():
 
     print("[SERIAL] Tidak ada ESP32 yang terhubung. Mode kamera mandiri aktif.")
     return None
+
+
+def sinkronkan_tomat_ke_esp32(worker):
+    """
+    Mengambil jumlah total tomat hari ini dari Web API / Database Server,
+    lalu mengirim perintah serial 'set_tomat <total>' ke ESP32 agar LCD sinkron.
+    """
+    if not worker or not worker.is_connected():
+        return
+
+    def _do_sync():
+        time.sleep(0.6)  # Tunggu handshake awal ESP32 selesai
+        try:
+            if "/api/" in WEB_API_URL:
+                sync_url = WEB_API_URL.rsplit("/api/", 1)[0] + "/api/dashboard_realtime.php"
+            elif "/web/api/" in WEB_API_URL:
+                sync_url = WEB_API_URL.rsplit("/web/api/", 1)[0] + "/web/api/dashboard_realtime.php"
+            else:
+                sync_url = "https://localhost.scode.web.id/2026-tiara-tomat/api/dashboard_realtime.php"
+
+            req = urllib.request.Request(
+                sync_url,
+                headers={"User-Agent": "Mozilla/5.0", "Connection": "close"}
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                totals = data.get("date_totals") or data.get("counter_totals") or {}
+                total_semua = int(totals.get("total_semua", 0))
+                total_matang = int(totals.get("total_matang", 0))
+                total_setengah = int(totals.get("total_setengah", 0))
+                total_belum = int(totals.get("total_belum", 0))
+
+                cmd_sync = f"set_tomat {total_semua} {total_matang} {total_setengah} {total_belum}"
+                worker.send(cmd_sync)
+                print(f"[SYNC] Sinkronisasi dari server ke ESP32 sukses -> Total: {total_semua} (Matang:{total_matang}, Kuning:{total_setengah}, Mentah:{total_belum})")
+        except Exception as e:
+            print(f"[SYNC WARN] Gagal sinkronisasi data dari server: {e}")
+
+    threading.Thread(target=_do_sync, daemon=True).start()
 
 
 serial_worker = init_serial()
@@ -1091,6 +1132,7 @@ if __name__ == "__main__":
     print("Petunjuk Kontrol:")
     print(" - Tekan 'Q': Keluar dari program.")
     print(" - Tekan 'M': Balik tampilan kamera (Toggle Mirror On / Off).")
+    print(" - Tekan 'S': Sinkronkan hitungan tomat dengan database server.")
     print(" - Tekan 'R': Reset counter jumlah tomat di LCD ESP32.")
     print("=" * 60)
 
@@ -1329,6 +1371,10 @@ if __name__ == "__main__":
                 MIRROR_KAMERA = not MIRROR_KAMERA
                 status_str = "AKTIF (Efek Cermin)" if MIRROR_KAMERA else "NONAKTIF (Arah Fisik Asli)"
                 print(f"[INFO] Tampilan Mirror: {status_str}")
+            elif tombol == ord("s"):
+                if serial_worker and serial_worker.is_connected():
+                    print("[SYNC] Meminta sinkronisasi ulang dengan database server...")
+                    sinkronkan_tomat_ke_esp32(serial_worker)
             elif tombol == ord("r"):
                 if serial_worker and serial_worker.is_connected():
                     serial_worker.send("reset_tomat")

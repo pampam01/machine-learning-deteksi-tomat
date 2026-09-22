@@ -35,13 +35,13 @@ def main():
             print("ESP32:", ser.readline().decode(errors="ignore").strip())
 
     print("\nPILIHAN UJI CEPAT S-CURVE & LCD I2C:")
-    print(" [1] Gerak S-Curve Servo 1 ke 0 derajat   (Matang / Buang Kiri)")
-    print(" [2] Gerak S-Curve Servo 1 ke 90 derajat  (Standby / Lurus Dinding Kiri)")
-    print(" [3] Gerak S-Curve Servo 2 ke 90 derajat  (Setengah Matang / Buang Kanan ke Tengah)")
-    print(" [4] Gerak S-Curve Servo 2 ke 0 derajat   (Standby / Lurus ke Depan di Dinding Kanan)")
-    print(" [m] Siklus Matang: Buka S-Curve -> Tahan 0.8s -> Tutup S-Curve (Servo 1)")
-    print(" [k] Siklus Setengah Matang: Buka S-Curve -> Tahan 0.8s -> Tutup S-Curve (Servo 2)")
-    print(" [t] Uji Berurutan Kedua Servo (Test Sequence)")
+    print(" [1] Gerak S-Curve Servo 1 ke 10 derajat (Matang / Buang Kiri)")
+    print(" [2] Gerak S-Curve Servo 1 ke 80 derajat (Standby / Dinding Kiri)")
+    print(" [3] Gerak S-Curve Servo 2 ke 80 derajat (Kuning / Buang Kanan)")
+    print(" [4] Gerak S-Curve Servo 2 ke 10 derajat (Standby / Dinding Kanan)")
+    print(" [m] Siklus Matang: Buka S-Curve Cepat -> Tahan 8.4s -> Tutup Halus (Servo 1)")
+    print(" [k] Siklus Kuning: Buka S-Curve Cepat -> Tahan 10.2s -> Tutup Halus (Servo 2)")
+    print(" [t] Uji Cepat Berurutan Kedua Servo (Quick Test Sequence)")
     print(" [h] LCD: Ubah Status Sistem ke HIDUP")
     print(" [x] LCD: Ubah Status Sistem ke MATI")
     print(" [r] LCD: Reset Jumlah Tomat ke 0")
@@ -53,29 +53,25 @@ def main():
         while True:
             pilih = input("\nMasukkan pilihan [1/2/3/4/m/k/t/h/x/r/s/q]: ").strip().lower()
             if pilih == "1":
-                print("Mengirim: s1 0 (S-Curve)")
-                send_cmd("s1 0")
+                print("Mengirim: s1 10 (S-Curve Buang Kiri)")
+                send_cmd("s1 10")
             elif pilih == "2":
-                print("Mengirim: s1 90 (S-Curve)")
-                send_cmd("s1 90")
+                print("Mengirim: s1 80 (S-Curve Standby Kiri)")
+                send_cmd("s1 80")
             elif pilih == "3":
-                print("Mengirim: s2 90 (S-Curve)")
-                send_cmd("s2 90")
+                print("Mengirim: s2 80 (S-Curve Buang Kanan)")
+                send_cmd("s2 80")
             elif pilih == "4":
-                print("Mengirim: s2 0 (S-Curve)")
-                send_cmd("s2 0")
+                print("Mengirim: s2 10 (S-Curve Standby Kanan)")
+                send_cmd("s2 10")
             elif pilih == "m":
-                print("Mengirim: matang (Siklus Penuh S-Curve + Tambah Counter)")
+                print("Mengirim: matang (Buka Cepat -> Tahan 8.4 detik -> Tutup Halus)")
                 send_cmd("matang")
-                time.sleep(2.0)
-                while ser.in_waiting:
-                    print("ESP32:", ser.readline().decode(errors="ignore").strip())
+                print("Servo 1 membuka dan menahan 8.4 detik...")
             elif pilih == "k":
-                print("Mengirim: setengah_matang (Siklus Penuh S-Curve + Tambah Counter)")
-                send_cmd("setengah_matang")
-                time.sleep(2.0)
-                while ser.in_waiting:
-                    print("ESP32:", ser.readline().decode(errors="ignore").strip())
+                print("Mengirim: kuning (Buka Cepat -> Tahan 10.2 detik -> Tutup Halus)")
+                send_cmd("kuning")
+                print("Servo 2 membuka dan menahan 10.2 detik...")
             elif pilih == "t":
                 print("Mengirim: test (S-Curve Sequence)")
                 send_cmd("test")
