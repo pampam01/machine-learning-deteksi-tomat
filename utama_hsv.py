@@ -124,6 +124,8 @@ class ESP32Worker(threading.Thread):
         self.last_ack = "-"
         self.ir_triggered = False
         self.ir_count = 0
+        self._last_sent_cmd = None
+        self._last_sent_time = 0.0
         self.running = True
         self.lock = threading.Lock()
 
@@ -211,6 +213,16 @@ class ESP32Worker(threading.Thread):
             time.sleep(0.01)  # Jeda 10ms hemat CPU
 
     def send(self, cmd):
+        cmd_clean = str(cmd).strip().lower()
+        now = time.time()
+        with self.lock:
+            # Cegah pengiriman command pemilah yang sama dalam jendela waktu 2.5 detik
+            if cmd_clean in ("kuning", "matang", "mentah"):
+                if self._last_sent_cmd == cmd_clean and (now - self._last_sent_time < 2.5):
+                    # Abaikan pengiriman command yang sama agar gerakan servo tidak tersendat
+                    return
+                self._last_sent_cmd = cmd_clean
+                self._last_sent_time = now
         self.queue_cmd.put(cmd)
 
     def get_sensor(self):
@@ -1205,10 +1217,10 @@ if __name__ == "__main__":
     last_hasil = None
     last_command_sent = None
     waktu_kirim_terakhir = 0.0
-    COOLDOWN_SERVO = 1.8  # Jeda aman (detik) sesuai siklus S-Curve: buka (0.4s) + tahan (0.8s) + tutup (0.4s) = 1.6s
+    COOLDOWN_SERVO = 3.5  # Jeda aman (detik) antar objek agar servo tidak terganggu oleh refleksi/gerakan ulang
     buffer_prediksi = deque(maxlen=7)  # Buffer 7 frame (~0.23s pada 30 FPS) untuk konsensus cepat & stabil
     sudah_dieksekusi_untuk_objek_ini = False
-    frames_kosong = 5  # Mulai dalam kondisi standby awal
+    frames_kosong = 15  # Mulai dalam kondisi standby awal (15 frame = ~500ms)
 
     t_awal = time.time()
     frame_count = 0
@@ -1326,12 +1338,13 @@ if __name__ == "__main__":
         else:
             # Objek di luar zona inspeksi atau meja / konveyor kosong
             frames_kosong += 1
-            if frames_kosong >= 5:  # Debounce ~150ms agar objek benar-benar terkonfirmasi lewat
+            if frames_kosong >= 15:  # Debounce ~500ms (15 frame) agar objek benar-benar terkonfirmasi lewat
                 buffer_prediksi.clear()
                 hasil = None
                 langkah = []
-                sudah_dieksekusi_untuk_objek_ini = False
+                # Hanya izinkan objek berikutnya dieksekusi setelah waktu cooldown servo selesai
                 if waktu_sekarang - waktu_kirim_terakhir >= COOLDOWN_SERVO:
+                    sudah_dieksekusi_untuk_objek_ini = False
                     last_hasil = None
                     last_command_sent = None
 
