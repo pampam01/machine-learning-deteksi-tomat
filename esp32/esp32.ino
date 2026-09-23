@@ -33,6 +33,17 @@ int totalMatang = 0;
 int totalSetengah = 0;
 int totalMentah = 0;
 
+// Siklus Status Tampilan LCD (BOOTING -> READY -> NORMAL)
+enum SystemLcdState {
+  LCD_BOOTING,      // Sedang booting (menunggu Raspberry Pi / Python)
+  LCD_SHOW_READY,   // Menampilkan banner "SISTEM: READY!"
+  LCD_NORMAL        // Tampilan operasional normal (STATUS & JML TOMAT)
+};
+
+SystemLcdState stateLcd = LCD_BOOTING;
+unsigned long waktuMulaiReady = 0;
+const unsigned long DURASI_BANNER_READY_MS = 2500;  // 2.5 detik tampil banner sebelum clear ke normal
+
 // Flag keberadaan LCD & buffer timer (anti-flicker & anti-freeze)
 bool lcdTerdeteksi = false;
 bool perluUpdateLcd = true;
@@ -42,6 +53,7 @@ unsigned long waktuLcdTerakhir = 0;
 
 // Baud rate komunikasi serial (disamakan dengan Python: 115200)
 const long BAUD_RATE = 115200;
+
 
 // ============================================================
 // KONFIGURASI SUDUT SERVO (0 - 180 Derajat)
@@ -325,6 +337,40 @@ void updateSmoothServo() {
 void updateTampilanLcd() {
   if (!lcdTerdeteksi) return;  // Lindungi jika LCD belum terpasang agar tidak menghambat pergerakan servo
 
+  // 1. TAHAP BOOTING: Animasi titik berjalan sampai Raspberry Pi siap terhubung
+  if (stateLcd == LCD_BOOTING) {
+    static unsigned long lastAnimBoot = 0;
+    static int dotIndex = 0;
+    if (millis() - lastAnimBoot >= 450) {
+      lastAnimBoot = millis();
+      dotIndex = (dotIndex + 1) % 4;  // 0, 1, 2, 3
+      char baris1[17];
+      if (dotIndex == 0) snprintf(baris1, sizeof(baris1), "SISTEM BOOTING  ");
+      else if (dotIndex == 1) snprintf(baris1, sizeof(baris1), "SISTEM BOOTING. ");
+      else if (dotIndex == 2) snprintf(baris1, sizeof(baris1), "SISTEM BOOTING..");
+      else snprintf(baris1, sizeof(baris1), "SISTEM BOOTING...");
+
+      lcd.setCursor(0, 0);
+      lcd.print(baris1);
+      lcd.setCursor(0, 1);
+      lcd.print("MOHON TUNGGU... ");
+    }
+    return;
+  }
+
+  // 2. TAHAP BANNER READY: Tampilkan pesan "SISTEM: READY!" selama 2.5 detik
+  if (stateLcd == LCD_SHOW_READY) {
+    if (millis() - waktuMulaiReady >= DURASI_BANNER_READY_MS) {
+      // Waktu 2.5 detik selesai -> Bersihkan layar (clear) dan beralih ke mode operasional biasa!
+      stateLcd = LCD_NORMAL;
+      lcd.clear();
+      perluUpdateLcd = true;
+    } else {
+      return;  // Pertahankan tulisan READY di layar sampai durasi selesai
+    }
+  }
+
+  // 3. TAHAP OPERASIONAL NORMAL
   // Throttle pembaruan LCD: maksimal sekali tiap 250ms agar bus I2C tidak membebani servo
   if (millis() - waktuLcdTerakhir < 250) return;
   waktuLcdTerakhir = millis();
@@ -352,6 +398,7 @@ void updateTampilanLcd() {
   lcd.setCursor(0, 1);
   lcd.print(baris2);
 }
+
 
 // ============================================================
 // EKSEKUSI PERINTAH KLASIFIKASI DENGAN DELAY TRANSIT KONVEYOR
@@ -512,15 +559,53 @@ void prosesSerial() {
         String data = serialBuffer;
         serialBuffer = "";
 
-        // 1. Handshake saat Python mendeteksi port
-        if (data == "go") {
+        // 1. Handshake & Sinyal Status Ready / Booting dari Raspberry Pi
+        if (data == "ready" || data == "system_ready") {
           statusSistemHidup = true;
           digitalWrite(pinRelay, HIGH);
+          stateLcd = LCD_SHOW_READY;
+          waktuMulaiReady = millis();
+          if (lcdTerdeteksi) {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print(" SISTEM: READY! ");
+            lcd.setCursor(0, 1);
+            lcd.print(" SIAP MEMILAH :)");
+          }
+          Serial.println("ACK_READY_OK");
+        }
+        else if (data == "go") {
+          statusSistemHidup = true;
+          digitalWrite(pinRelay, HIGH);
+          // Jika masih dalam tahap booting dan menerima handshake 'go', aktifkan banner ready
+          if (stateLcd == LCD_BOOTING) {
+            stateLcd = LCD_SHOW_READY;
+            waktuMulaiReady = millis();
+            if (lcdTerdeteksi) {
+              lcd.clear();
+              lcd.setCursor(0, 0);
+              lcd.print(" SISTEM: READY! ");
+              lcd.setCursor(0, 1);
+              lcd.print(" SIAP MEMILAH :)");
+            }
+          }
           perluUpdateLcd = true;
           Serial.println("ok");
         }
+        else if (data == "booting") {
+          stateLcd = LCD_BOOTING;
+          if (lcdTerdeteksi) {
+            lcd.clear();
+            lcd.setCursor(0, 0);
+            lcd.print("SISTEM: BOOTING ");
+            lcd.setCursor(0, 1);
+            lcd.print("MOHON TUNGGU... ");
+          }
+          Serial.println("ACK_BOOTING");
+        }
         // 2. Pembacaan sensor proximity konveyor
         else if (data == "se") {
+
           statusProximity = digitalRead(pinProximity);
           Serial.println(statusProximity);
         }
@@ -815,11 +900,10 @@ void setup() {
     lcd.backlight();
     lcd.clear();
     lcd.setCursor(0, 0);
-    lcd.print("SISTEM SORTIR");
+    lcd.print("SISTEM BOOTING..");
     lcd.setCursor(0, 1);
-    lcd.print("TOMAT C4.5 READY");
-    delay(200);
-    updateTampilanLcd();
+    lcd.print("MOHON TUNGGU... ");
+    stateLcd = LCD_BOOTING;
   }
 
   // Uji gerak halus singkat saat boot (sangat halus dengan resolusi microsecond)
@@ -850,11 +934,12 @@ void loop() {
   bool servoSedangBergerak = (stateServo1 == SERVO_OPENING || stateServo1 == SERVO_CLOSING || stateServo2 == SERVO_OPENING || stateServo2 == SERVO_CLOSING);
 
   if (!servoSedangBergerak) {
-    if (perluUpdateLcd || (pesanKhususLcd.length() > 0 && millis() - waktuPesanKhusus >= 1500)) {
+    if (stateLcd != LCD_NORMAL || perluUpdateLcd || (pesanKhususLcd.length() > 0 && millis() - waktuPesanKhusus >= 1500)) {
       updateTampilanLcd();
       perluUpdateLcd = false;
     }
   }
+
 
   // Beri kesempatan FreeRTOS scheduler agar watchdog tidak terpicu
   yield();

@@ -288,6 +288,7 @@ def init_serial():
                 print(f"[SERIAL] Berhasil terhubung ke {port.device} ({port.description})")
                 worker = ESP32Worker(temp_ser, port.device)
                 worker.start()
+                worker.send("ready")
                 sinkronkan_tomat_ke_esp32(worker)
                 return worker
             else:
@@ -1227,6 +1228,12 @@ if __name__ == "__main__":
     fps_hitung = 0.0
     last_serial_retry = time.time()
 
+    print("[INFO] Menghubungkan ke hardware mikrokontroler ESP32...")
+    serial_worker = init_serial()
+    if serial_worker and serial_worker.is_connected():
+        serial_worker.send("ready")
+        print("[SERIAL] Sinyal SISTEM: READY berhasil dikirim ke LCD ESP32.")
+
     print("[INFO] Memulai loop video... Tekan 'Q' untuk keluar.")
 
     while True:
@@ -1236,6 +1243,8 @@ if __name__ == "__main__":
         if (serial_worker is None or not serial_worker.is_connected()) and (waktu_sekarang - last_serial_retry >= 3.0):
             last_serial_retry = waktu_sekarang
             serial_worker = init_serial()
+            if serial_worker and serial_worker.is_connected():
+                serial_worker.send("ready")
 
         # Hitung FPS secara berkala
         frame_count += 1
