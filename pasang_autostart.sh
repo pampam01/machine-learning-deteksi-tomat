@@ -24,6 +24,12 @@ fi
 
 TARGET_USER="${SUDO_USER:-root}"
 
+# Tambahkan user ke grup video & dialout agar bisa mengakses kamera dan USB tanpa perlu sudo
+if [ "$TARGET_USER" != "root" ]; then
+    echo "[INFO] Memastikan user $TARGET_USER memiliki izin port USB & kamera (grup video, dialout)..."
+    usermod -a -G video,dialout "$TARGET_USER" 2>/dev/null || true
+fi
+
 echo "[INFO] Menyiapkan service systemd di $SERVICE_FILE..."
 
 cat <<EOF > "$SERVICE_FILE"
@@ -31,6 +37,7 @@ cat <<EOF > "$SERVICE_FILE"
 Description=Sistem Deteksi dan Pemilah Tomat C4.5 (Appliance Mode)
 After=network.target multi-user.target
 Wants=network.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -38,7 +45,9 @@ User=$TARGET_USER
 WorkingDirectory=$DIR
 ExecStart=/bin/bash $DIR/jalankan.sh
 Restart=always
-RestartSec=3
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=5
 Environment=PYTHONUNBUFFERED=1
 Environment=HEADLESS=1
 StandardOutput=journal
