@@ -259,25 +259,56 @@ class ESP32Worker(threading.Thread):
 serial_worker = None
 
 
+_reconnecting_serial = False
+
+
 def init_serial():
     ports = serial.tools.list_ports.comports()
     for port in ports:
-        # Lewati virtual port Bluetooth agar tidak hang
-        if "bluetooth" in port.description.lower():
+        dev_name = port.device.lower()
+        desc_name = (port.description or "").lower()
+
+        # 1. Lewati port Bluetooth & UART internal Raspberry Pi (/dev/ttyS*, /dev/ttyAMA*)
+        #    HANYA cari port USB yang benar-benar terhubung ke ESP32!
+        if "bluetooth" in desc_name or "ttys" in dev_name or "ttyama" in dev_name:
             continue
+
+        # 2. Pastikan perangkat adalah USB to UART (misal: /dev/ttyUSB*, /dev/ttyACM*, CP2102, CH340, FTDI)
+        if not ("ttyusb" in dev_name or "ttyacm" in dev_name or "usb" in desc_name or "cp210" in desc_name or "ch340" in desc_name or "uart" in desc_name):
+            continue
+
         try:
-            print(f"[SERIAL] Mengecek port {port.device}: {port.description} (Baud: {BAUD_RATE_ESP32})")
-            temp_ser = serial.Serial(port.device, BAUD_RATE_ESP32, timeout=0.25)
-            # ESP32 auto-reset saat serial dibuka (DTR/RTS).
-            # Lakukan handshake aktif berulang selama s/d 4.5 detik
+            print(f"[SERIAL] Mengecek port USB {port.device}: {port.description} (Baud: {BAUD_RATE_ESP32})")
+
+            # Inisialisasi port dengan DTR & RTS non-aktif agar ESP32 CP2102 tidak terkunci di mode Reset/Bootloader
+            temp_ser = serial.Serial()
+            temp_ser.port = port.device
+            temp_ser.baudrate = BAUD_RATE_ESP32
+            temp_ser.timeout = 0.25
+            temp_ser.dtr = False
+            temp_ser.rts = False
+            temp_ser.open()
+
+            # Pastikan DTR & RTS tetap False setelah port terbuka
+            try:
+                temp_ser.dtr = False
+                temp_ser.rts = False
+            except Exception:
+                pass
+
+            time.sleep(0.2)
+            temp_ser.reset_input_buffer()
+            temp_ser.reset_output_buffer()
+
+            # Lakukan handshake aktif: kirim 'go' dan dengarkan respon ESP32
             t_mulai = time.time()
             terhubung = False
-            while time.time() - t_mulai < 4.5:
+            while time.time() - t_mulai < 3.0:
                 temp_ser.write(b"go\n")
-                time.sleep(0.2)
+                time.sleep(0.15)
                 while temp_ser.in_waiting:
                     baris = temp_ser.readline().decode(errors="ignore").strip().lower()
-                    if "ok" in baris or "esp32_ready" in baris:
+                    if any(k in baris for k in ["ok", "esp32_ready", "ack_ready_ok", "status", "ack"]):
                         terhubung = True
                         break
                 if terhubung:
@@ -299,6 +330,31 @@ def init_serial():
 
     print("[SERIAL] Tidak ada ESP32 yang terhubung. Mode kamera mandiri aktif.")
     return None
+
+
+def reconnect_serial_async():
+    """Menghubungkan ulang ESP32 di background thread agar tidak membekukan loop video kamera."""
+    global serial_worker, _reconnecting_serial
+    if _reconnecting_serial:
+        return
+    _reconnecting_serial = True
+
+    def _task():
+        global serial_worker, _reconnecting_serial
+        try:
+            worker = init_serial()
+            if worker and worker.is_connected():
+                serial_worker = worker
+                serial_worker.send("ready")
+                print(f"[SERIAL] Auto-reconnect SUKSES: Terhubung ke {worker.port_name}")
+        except Exception as err:
+            print(f"[SERIAL WARN] Auto-reconnect gagal: {err}")
+        finally:
+            _reconnecting_serial = False
+
+    t = threading.Thread(target=_task, daemon=True)
+    t.start()
+
 
 
 def sinkronkan_tomat_ke_esp32(worker):
@@ -515,10 +571,10 @@ if WEB_API_ENABLED:
 # Tomat hanya diproses saat berada mantap di dalam zona tengah konveyor,
 # agar tidak salah baca akibat potongan objek terpotong di tepi kamera.
 ZONA_INSPEKSI = {
-    "x_min": 0.12,  # 12% dari lebar kiri frame
-    "x_max": 0.88,  # 88% dari lebar kiri frame
-    "y_min": 0.08,  # 8% dari tinggi atas frame
-    "y_max": 0.92,  # 92% dari tinggi atas frame
+    "x_min": 0.05,  # 5% dari lebar kiri frame (cakupan penuh konveyor)
+    "x_max": 0.95,  # 95% dari lebar kiri frame
+    "y_min": 0.05,  # 5% dari tinggi atas frame
+    "y_max": 0.95,  # 95% dari tinggi atas frame
 }
 
 
@@ -569,7 +625,7 @@ def validasi_hue_warna(crop_bgr, raw_hasil):
 # ============================================================
 # DETEKSI OBJEK TOMAT & REGION OF INTEREST (ROI)
 # ============================================================
-def deteksi_objek_tomat(frame, min_area=2000):
+def deteksi_objek_tomat(frame, min_area=600):
     """
     Mendeteksi posisi objek tomat (merah/kuning/hijau) di frame kamera.
     Mengembalikan (crop_tomat, bbox, in_zone) jika ditemukan, atau (None, None, False) jika meja kosong.
@@ -579,12 +635,12 @@ def deteksi_objek_tomat(frame, min_area=2000):
     h_frame, w_frame = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # Mask warna objek tomat:
-    # 1. Spektrum Merah bawah, Oranye, Kuning, dan Hijau: Hue 0 s/d 88
-    # 2. Spektrum Merah atas (wrap-around HSV): Hue 160 s/d 180
+    # Mask warna objek tomat toleran:
+    # 1. Spektrum Merah bawah, Oranye, Kuning, dan Hijau: Hue 0 s/d 90
+    # 2. Spektrum Merah atas (wrap-around HSV): Hue 155 s/d 180
     # Memfilter background konveyor abu-abu/hitam/biru/ungu
-    mask1 = cv2.inRange(hsv, (0, 40, 40), (88, 255, 255))
-    mask2 = cv2.inRange(hsv, (160, 40, 40), (180, 255, 255))
+    mask1 = cv2.inRange(hsv, (0, 25, 25), (90, 255, 255))
+    mask2 = cv2.inRange(hsv, (155, 25, 25), (180, 255, 255))
     mask = cv2.bitwise_or(mask1, mask2)
 
     # Bersihkan noise kamera dengan filter morfologi
@@ -1227,6 +1283,8 @@ if __name__ == "__main__":
     frame_count = 0
     fps_hitung = 0.0
     last_serial_retry = time.time()
+    last_heartbeat = time.time()
+    gagal_frame_count = 0
 
     print("[INFO] Menghubungkan ke hardware mikrokontroler ESP32...")
     serial_worker = init_serial()
@@ -1239,12 +1297,16 @@ if __name__ == "__main__":
     while True:
         waktu_sekarang = time.time()
 
-        # Auto-reconnect Serial ESP32 jika belum tersambung / kabel baru dicolokkan (Hotplug)
+        # Heartbeat berkala saat mode Headless (agar terlihat jelas di journalctl bahwa kamera aktif)
+        if HEADLESS and (waktu_sekarang - last_heartbeat >= 8.0):
+            last_heartbeat = waktu_sekarang
+            port_status = serial_worker.port_name if (serial_worker and serial_worker.is_connected()) else "OFF"
+            print(f"[STATUS] Kamera AKTIF ({fps_hitung:.1f} FPS) | ESP32: {port_status} | Menunggu buah tomat di konveyor...")
+
+        # Auto-reconnect Serial ESP32 secara asynchronous di background agar loop kamera TIDAK PERNAH MACET!
         if (serial_worker is None or not serial_worker.is_connected()) and (waktu_sekarang - last_serial_retry >= 3.0):
             last_serial_retry = waktu_sekarang
-            serial_worker = init_serial()
-            if serial_worker and serial_worker.is_connected():
-                serial_worker.send("ready")
+            reconnect_serial_async()
 
         # Hitung FPS secara berkala
         frame_count += 1
@@ -1253,17 +1315,19 @@ if __name__ == "__main__":
             frame_count = 0
             t_awal = waktu_sekarang
 
-        # Ambil nilai sensor proximity dan status trigger IR secara instan (0 ms)
+        # Ambil nilai sensor proximity
         respon_sensor = serial_worker.get_sensor() if serial_worker else "-"
         ir_terpicu = serial_worker.pop_ir_trigger() if serial_worker else False
-        if ir_terpicu:
-            print("[SENSOR IR] Buah tomat fisik terkonfirmasi melewati sensor proximity!")
 
         ret, frame = kamera.read()
 
         if not ret or frame is None:
+            gagal_frame_count += 1
+            if gagal_frame_count % 50 == 1:
+                print(f"[KAMERA ERROR] Gagal membaca frame dari webcam (ret={ret})!")
             time.sleep(0.005)
             continue
+        gagal_frame_count = 0
 
         # Pembalikan horizontal (Mirroring):
         # Default False = Arah fisik asli (tidak terbalik kiri-kanan)
@@ -1273,6 +1337,16 @@ if __name__ == "__main__":
         # Resize jika ukuran frame berbeda dengan UKURAN_FRAME
         if frame.shape[1] != UKURAN_FRAME[0] or frame.shape[0] != UKURAN_FRAME[1]:
             frame = cv2.resize(frame, UKURAN_FRAME)
+
+        # Notifikasi saat sensor IR proximity mendeteksi buah tomat fisik
+        if ir_terpicu:
+            mean_bright = float(np.mean(frame))
+            print(f"[SENSOR IR] Tomat terdeteksi! Kecerahan kamera: {mean_bright:.1f} | Frame: {frame.shape[1]}x{frame.shape[0]}")
+            crop_dbg, bbox_dbg, in_zone_dbg = deteksi_objek_tomat(frame)
+            if crop_dbg is not None:
+                print(f"[KAMERA DIAGNOSTIK] Objek tomat terverifikasi di frame! Kotak: {bbox_dbg} | Dalam Zona: {in_zone_dbg}")
+            else:
+                print("[KAMERA DIAGNOSTIK] Tomat terpicu sensor IR, memeriksa visual frame...")
 
         # ====================================================
         # DETEKSI OBJEK TOMAT (ROI CROPPING & ZONA INSPEKSI)
@@ -1365,20 +1439,19 @@ if __name__ == "__main__":
         total_ir = serial_worker.get_ir_count() if serial_worker else 0
         status_web = web_worker.get_status()[0] if web_worker else "OFF"
 
-        output = tampilkan(
-            frame,
-            langkah,
-            hasil,
-            port_info=status_port,
-            status_sensor=respon_sensor,
-            fps=fps_hitung,
-            bbox=bbox,
-            in_zone=in_zone,
-            ir_count=total_ir,
-            web_status=status_web,
-        )
-
         if not HEADLESS:
+            output = tampilkan(
+                frame,
+                langkah,
+                hasil,
+                port_info=status_port,
+                status_sensor=respon_sensor,
+                fps=fps_hitung,
+                bbox=bbox,
+                in_zone=in_zone,
+                ir_count=total_ir,
+                web_status=status_web,
+            )
             cv2.imshow(window_name, output)
 
             # ====================================================
