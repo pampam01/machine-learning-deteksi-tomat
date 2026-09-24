@@ -396,7 +396,7 @@ def sinkronkan_tomat_ke_esp32(worker):
     threading.Thread(target=_do_sync, daemon=True).start()
 
 
-serial_worker = init_serial()
+serial_worker = None
 
 
 # ============================================================
