@@ -35,7 +35,7 @@ echo "[INFO] Menyiapkan service systemd di $SERVICE_FILE..."
 cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Sistem Deteksi dan Pemilah Tomat C4.5 (Appliance Mode)
-After=network.target multi-user.target
+After=network.target sound.target
 Wants=network.target
 StartLimitIntervalSec=0
 
