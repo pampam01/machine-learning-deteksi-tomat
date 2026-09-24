@@ -25,12 +25,6 @@ test_images/*
 *.png
 *.bmp
 
-# Pengecualian: Izinkan dataset tomat di-track oleh Git
-!dataset tomat/
-!dataset tomat/**
-!dataset tomat/**/*.jpg
-!dataset tomat/**/*.jpeg
-!dataset tomat/**/*.png
-!dataset tomat/**/*.txt
-!dataset tomat/**/*.yaml
-!dataset tomat/**/*.csv
+# Dataset gambar lokal (diabaikan agar git pull di Raspberry Pi sangat cepat)
+dataset tomat/
+
