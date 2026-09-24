@@ -48,6 +48,7 @@ Restart=always
 RestartSec=5
 KillMode=mixed
 TimeoutStopSec=5
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PYTHONUNBUFFERED=1
 Environment=HEADLESS=1
 StandardOutput=journal

@@ -13,19 +13,12 @@ echo "   SISTEM PEMILAH TOMAT C4.5 - RASPBERRY PI (EZ MODE)"
 echo "============================================================"
 echo "Direktori Kerja: $DIR"
 
-# Cek apakah ada virtual environment (venv / .venv / env)
-if [ -f "$DIR/.venv/bin/activate" ]; then
-    echo "[INFO] Mengaktifkan virtual environment (.venv)..."
-    source "$DIR/.venv/bin/activate"
-elif [ -f "$DIR/venv/bin/activate" ]; then
-    echo "[INFO] Mengaktifkan virtual environment (venv)..."
-    source "$DIR/venv/bin/activate"
-elif [ -f "$DIR/env/bin/activate" ]; then
-    echo "[INFO] Mengaktifkan virtual environment (env)..."
-    source "$DIR/env/bin/activate"
-else
-    echo "[INFO] Menggunakan Python sistem..."
+# Langsung gunakan Python sistem Raspberry Pi (Murni Tanpa Venv)
+PYTHON_BIN="/usr/bin/python3"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    PYTHON_BIN="$(which python3)"
 fi
+echo "[INFO] Python yang digunakan: $PYTHON_BIN (Sistem Global - Tanpa Venv)"
 
 # Tunggu hingga perangkat kamera dan USB terinisialisasi saat boot awal (maksimal 8 detik)
 echo "[INFO] Menunggu inisialisasi hardware kamera & USB..."
@@ -50,9 +43,9 @@ echo "[INFO] Menjalankan sistem pemilah tomat C4.5..."
 # Cek apakah modul kamera Pi libcamera digunakan tanpa webcam USB
 if command -v libcamerify >/dev/null 2>&1 && [ ! -e /dev/video0 ]; then
     echo "[INFO] Menjalankan via libcamerify untuk kamera Raspberry Pi..."
-    libcamerify python3 utama_hsv.py
+    libcamerify "$PYTHON_BIN" utama_hsv.py
 else
-    python3 utama_hsv.py
+    "$PYTHON_BIN" utama_hsv.py
 fi
 
 EXIT_CODE=$?
