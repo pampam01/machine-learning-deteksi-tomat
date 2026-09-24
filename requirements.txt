@@ -4,7 +4,7 @@ numpy
 
 # Machine Learning & C4.5 Decision Tree Model
 # Note: scikit-learn 1.5.2 is pinned to match the exact version used to serialize model_c45.pkl & model_c45_hist.pkl
-scikit-learn==1.5.2
+scikit-learn
 
 # Hardware Communication (ESP32 Serial Interface)
 # IMPORTANT: Package name on PyPI is 'pyserial' (not 'serial'), used as 'import serial' and 'import serial.tools.list_ports'
