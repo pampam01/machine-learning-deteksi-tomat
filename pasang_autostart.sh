@@ -22,13 +22,22 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-TARGET_USER="${SUDO_USER:-root}"
+TARGET_USER="${SUDO_USER:-$USER}"
+if [ "$TARGET_USER" = "root" ] || [ -z "$TARGET_USER" ]; then
+    TARGET_USER="$(ls -1 /home 2>/dev/null | head -n 1)"
+    if [ -z "$TARGET_USER" ]; then
+        TARGET_USER="tiara"
+    fi
+fi
+
+# Kembalikan kepemilikan folder proyek ke user biasa agar tidak terkunci oleh root
+echo "[INFO] Menyelaraskan kepemilikan direktori kerja ke user $TARGET_USER..."
+chown -R "$TARGET_USER:$TARGET_USER" "$DIR" 2>/dev/null || true
+git config --global --add safe.directory "$DIR" 2>/dev/null || true
 
 # Tambahkan user ke grup video & dialout agar bisa mengakses kamera dan USB tanpa perlu sudo
-if [ "$TARGET_USER" != "root" ]; then
-    echo "[INFO] Memastikan user $TARGET_USER memiliki izin port USB & kamera (grup video, dialout)..."
-    usermod -a -G video,dialout "$TARGET_USER" 2>/dev/null || true
-fi
+echo "[INFO] Memastikan user $TARGET_USER memiliki izin port USB & kamera (grup video, dialout)..."
+usermod -a -G video,dialout "$TARGET_USER" 2>/dev/null || true
 
 echo "[INFO] Menyiapkan service systemd di $SERVICE_FILE..."
 
@@ -70,6 +79,9 @@ systemctl enable ${SERVICE_NAME}.service
 
 echo "[INFO] Menjalankan service sekarang..."
 systemctl restart ${SERVICE_NAME}.service
+
+echo "[INFO] Mengunci data ke MicroSD (sync)..."
+sync
 
 echo ""
 echo "============================================================"
